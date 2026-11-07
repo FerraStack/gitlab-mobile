@@ -97,7 +97,7 @@ Preview notes for an existing tag locally without publishing anything:
 
 ```bash
 python3 .github/scripts/generate-release-notes.py \
-  --tag v1.4.0 --repository CBoYXD/gitlab-mobile --output /tmp/release-notes.md
+  --tag v1.4.0 --repository FerraStack/gitlab-mobile --output /tmp/release-notes.md
 cat /tmp/release-notes.md
 ```
 
