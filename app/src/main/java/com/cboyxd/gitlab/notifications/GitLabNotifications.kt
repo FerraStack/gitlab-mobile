@@ -33,8 +33,11 @@ object GitLabNotifications {
   internal const val REVIEWS = "gitlab_reviews"
   internal const val ACTIVITY = "gitlab_activity"
   internal const val PIPELINES = "gitlab_pipelines"
-  private const val PERIODIC = "gitlab_notification_poll"
+  internal const val PERIODIC = "gitlab_notification_poll"
   private const val IMMEDIATE = "gitlab_notification_check"
+  /** Tags the one-off check so the worker can tell it from the periodic one in diagnostics. */
+  internal const val TAG_ONE_TIME = "notification_check_one_time"
+  internal val CHANNEL_IDS = listOf(REVIEWS, ACTIVITY, PIPELINES)
 
   fun createChannels(context: Context) {
     if (Build.VERSION.SDK_INT < 26) return
@@ -48,9 +51,11 @@ object GitLabNotifications {
     }
   }
 
+  fun permissionGranted(context: Context): Boolean =
+    Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
   fun allowed(context: Context): Boolean =
-    (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
-      NotificationManagerCompat.from(context).areNotificationsEnabled()
+    permissionGranted(context) && NotificationManagerCompat.from(context).areNotificationsEnabled()
 
   fun schedule(context: Context, hasAccounts: Boolean) {
     createChannels(context)
@@ -65,11 +70,12 @@ object GitLabNotifications {
     work.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP,
       PeriodicWorkRequestBuilder<GitLabNotificationWorker>(15, TimeUnit.MINUTES).setConstraints(constraints).build())
     work.enqueueUniqueWork(IMMEDIATE, ExistingWorkPolicy.KEEP,
-      OneTimeWorkRequestBuilder<GitLabNotificationWorker>().setConstraints(constraints).build())
+      OneTimeWorkRequestBuilder<GitLabNotificationWorker>().setConstraints(constraints).addTag(TAG_ONE_TIME).build())
   }
 
-  internal fun show(context: Context, event: GitLabNotificationEvent) {
-    if (!allowed(context)) return
+  /** Posts [event]; false when notifications are off or the permission was just revoked. */
+  internal fun show(context: Context, event: GitLabNotificationEvent): Boolean {
+    if (!allowed(context)) return false
     val intent = Intent(context, MainActivity::class.java).apply {
       action = ACTION_OPEN
       data = Uri.Builder().scheme("gitlab-mobile").authority("notification").appendPath(event.accountId).appendPath(event.id).build()
@@ -95,10 +101,12 @@ object GitLabNotifications {
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
       .setGroup("gitlab:${event.accountId}")
       .build()
-    try {
+    return try {
       NotificationManagerCompat.from(context).notify("${event.accountId}:${event.id}", 0, notification)
+      true
     } catch (_: SecurityException) {
       // Permission can be revoked between the check and posting.
+      false
     }
   }
 }

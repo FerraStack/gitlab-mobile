@@ -46,6 +46,8 @@ sealed class ScreenDestination {
   data object MainTabs : ScreenDestination()
   data object UserProfile : ScreenDestination()
   data object Instances : ScreenDestination()
+  data object NotificationSettings : ScreenDestination()
+  data object NotificationDiagnostics : ScreenDestination()
   data object IssuesList : ScreenDestination()
   data object MergeRequestsList : ScreenDestination()
   data object PipelinesList : ScreenDestination()

@@ -23,10 +23,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicInteger
 
 class GitLabNotificationWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
   override suspend fun doWork(): Result = try {
-    if (GitLabNotificationMonitor.poll(applicationContext)) Result.success() else Result.retry()
+    val trigger = if (GitLabNotifications.TAG_ONE_TIME in tags) PollTrigger.ONE_TIME else PollTrigger.PERIODIC
+    if (GitLabNotificationMonitor.poll(applicationContext, trigger)) Result.success() else Result.retry()
   } catch (cancel: CancellationException) {
     throw cancel
   } catch (_: Exception) {
@@ -39,8 +41,18 @@ object GitLabNotificationMonitor {
   private val lock = Mutex()
   private val repository = GitLabRepository()
 
-  suspend fun poll(context: Context): Boolean = withContext(Dispatchers.IO) {
-    if (!lock.tryLock()) return@withContext true
+  /**
+   * Checks every signed-in account once and records the run for diagnostics. Returns false when
+   * a failure is worth retrying soon (network, 429, 5xx).
+   */
+  suspend fun poll(context: Context, trigger: PollTrigger = PollTrigger.APP_OPEN): Boolean = withContext(Dispatchers.IO) {
+    val log = PollLog(context)
+    val started = System.currentTimeMillis()
+    if (!lock.tryLock()) {
+      // The in-app loop overlapping a background check is normal; don't flood the log with it.
+      if (trigger != PollTrigger.APP_OPEN) log.record(PollRun(started, 0, trigger, PollOutcome.BUSY))
+      return@withContext true
+    }
     try {
       GitLabNotifications.createChannels(context)
       val store = InstanceStore.get(context)
@@ -53,15 +65,20 @@ object GitLabNotificationMonitor {
         if (notification.tag?.substringBefore(':') !in accounts.map { it.id }) manager.cancel(notification.tag, notification.id)
       }
       var success = true
-      for (account in accounts) {
+      val results = accounts.map { account ->
+        val delivered = AtomicInteger()
         try {
-          if (!pollAccount(context, store, notifications, account)) success = false
+          val errors = pollAccount(context, store, notifications, account, delivered)
+          if (errors.any { it.retryable }) success = false
+          AccountPoll(account.id, account.name, ok = errors.isEmpty(), error = errors.firstOrNull()?.message, delivered = delivered.get())
         } catch (cancel: CancellationException) {
           throw cancel
-        } catch (_: Exception) {
+        } catch (error: Exception) {
           success = false
+          AccountPoll(account.id, account.name, ok = false, error = describe(error), delivered = delivered.get())
         }
       }
+      log.record(PollRun(started, System.currentTimeMillis() - started, trigger, PollRun.outcomeOf(results), results))
       success
     } finally {
       lock.unlock()
@@ -84,7 +101,21 @@ object GitLabNotificationMonitor {
     }
   }
 
-  private suspend fun pollAccount(context: Context, store: InstanceStore, saved: NotificationStore, account: GitLabInstance): Boolean = coroutineScope {
+  private class FeedError(val message: String, val retryable: Boolean)
+
+  private fun describe(error: Throwable): String = when (error) {
+    is GitLabApiException -> "${error.code}: ${error.message.orEmpty()}".trimEnd(':', ' ')
+    else -> error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+  }
+
+  /** Polls one account and returns the feeds' errors; empty when every feed was read. */
+  private suspend fun pollAccount(
+    context: Context,
+    store: InstanceStore,
+    saved: NotificationStore,
+    account: GitLabInstance,
+    delivered: AtomicInteger,
+  ): List<FeedError> = coroutineScope {
     val started = System.currentTimeMillis()
     val since = saved.cursor(account.id, "authored")
     val todos = async { api(store, account) { repository.getTodos(it) } }
@@ -96,9 +127,9 @@ object GitLabNotificationMonitor {
     val todoResult = todos.await()
     val authoredResult = authored.await()
     // Signing out during a network request must not deliver events from that account.
-    if (store.getInstances().none { it.id == account.id && it.token.isNotBlank() }) return@coroutineScope true
-    assignedResult.getOrNull()?.let { processMembership(context, saved, account, "assigned", it, started) }
-    reviewResult.getOrNull()?.let { processMembership(context, saved, account, "review", it, started) }
+    if (store.getInstances().none { it.id == account.id && it.token.isNotBlank() }) return@coroutineScope emptyList()
+    assignedResult.getOrNull()?.let { processMembership(context, saved, delivered, account, "assigned", it, started) }
+    reviewResult.getOrNull()?.let { processMembership(context, saved, delivered, account, "review", it, started) }
     todoResult.getOrNull()?.let { list ->
       val todoSince = saved.cursor(account.id, "todos")
       val suppressedAssigned = assignedResult.getOrNull()?.map { mrKey(it) }?.toSet().orEmpty()
@@ -114,7 +145,7 @@ object GitLabNotificationMonitor {
           eventForTodo(account, todo)?.let { saved.record(it) }
           return@forEach
         }
-        eventForTodo(account, todo)?.let { event -> deliver(context, saved, event) }
+        eventForTodo(account, todo)?.let { event -> deliver(context, saved, delivered, event) }
         // If a membership endpoint failed, a to-do still establishes that membership and
         // prevents a duplicate announcement when the endpoint recovers.
         val feed = when {
@@ -145,7 +176,7 @@ object GitLabNotificationMonitor {
         }
         if (title != null) {
           val actor = (if (mr.state == "merged") mr.mergeUser ?: mr.mergedBy else mr.closedBy)?.let { it.name.ifBlank { it.username } }
-          deliver(context, saved, mrEvent(account, mr, "state:${mr.state}:${mr.mergedAt ?: mr.closedAt ?: mr.updatedAt}", title, GitLabNotifications.ACTIVITY, actor))
+          deliver(context, saved, delivered, mrEvent(account, mr, "state:${mr.state}:${mr.mergedAt ?: mr.closedAt ?: mr.updatedAt}", title, GitLabNotifications.ACTIVITY, actor))
         }
       }
       list.forEach { previous.put(mrKey(it), it.state) }
@@ -153,17 +184,18 @@ object GitLabNotificationMonitor {
       saved.saveSnapshot(account.id, "authored", previous)
       saved.advance(account.id, "authored", started)
     }
-    listOf(assignedResult, reviewResult, todoResult, authoredResult).none { result ->
-      val error = result.exceptionOrNull()
-      error != null && (error !is GitLabApiException || error.code == 429 || error.code >= 500)
-    }
+    listOf(assignedResult, reviewResult, todoResult, authoredResult).mapNotNull { result ->
+      result.exceptionOrNull()?.let { error ->
+        FeedError(describe(error), retryable = error !is GitLabApiException || error.code == 429 || error.code >= 500)
+      }
+    }.distinctBy { it.message }
   }
 
-  private fun processMembership(context: Context, saved: NotificationStore, account: GitLabInstance, feed: String, list: List<GitLabMergeRequest>, started: Long) {
+  private fun processMembership(context: Context, saved: NotificationStore, delivered: AtomicInteger, account: GitLabInstance, feed: String, list: List<GitLabMergeRequest>, started: Long) {
     val old = saved.snapshot(account.id, feed)
     if (saved.cursor(account.id, feed) > 0) list.forEach { mr ->
       if (!old.has(mrKey(mr))) {
-        deliver(context, saved, mrEvent(account, mr, "$feed:${mr.updatedAt}", if (feed == "review") "Review requested from you" else "Merge request assigned to you", GitLabNotifications.REVIEWS))
+        deliver(context, saved, delivered, mrEvent(account, mr, "$feed:${mr.updatedAt}", if (feed == "review") "Review requested from you" else "Merge request assigned to you", GitLabNotifications.REVIEWS))
       }
     }
     val next = JSONObject()
@@ -172,8 +204,8 @@ object GitLabNotificationMonitor {
     saved.advance(account.id, feed, started)
   }
 
-  private fun deliver(context: Context, saved: NotificationStore, event: GitLabNotificationEvent) {
-    if (saved.record(event)) GitLabNotifications.show(context, event)
+  private fun deliver(context: Context, saved: NotificationStore, delivered: AtomicInteger, event: GitLabNotificationEvent) {
+    if (saved.record(event) && GitLabNotifications.show(context, event)) delivered.incrementAndGet()
   }
 
   private fun mrKey(mr: GitLabMergeRequest) = "${mr.projectId}:${mr.iid}"

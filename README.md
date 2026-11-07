@@ -46,6 +46,7 @@ A native Android client for GitLab.com and self-hosted GitLab servers, built wit
 
 **Everything else**
 - Inbox for GitLab to-dos, with filters and mark as done
+- Notification diagnostics: what can delay background checks on this phone (permission, categories, standby bucket, battery optimization, background restriction, Data Saver), when checks really ran, per-account errors and a Check now button
 - Global search for projects, issues, merge requests and people
 - User profiles with status, links, followers and profile README; groups with subgroups and projects
 - GitLab links inside Markdown open the matching screen in the app
