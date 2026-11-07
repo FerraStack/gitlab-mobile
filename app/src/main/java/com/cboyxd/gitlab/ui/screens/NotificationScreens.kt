@@ -6,9 +6,11 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.BatteryAlert
 import androidx.compose.material.icons.outlined.CheckCircleOutline
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Refresh
@@ -42,7 +45,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.cboyxd.gitlab.notifications.BatteryCardState
+import com.cboyxd.gitlab.notifications.BatteryHelp
 import com.cboyxd.gitlab.notifications.DataSaver
+import com.cboyxd.gitlab.notifications.OemBatteryHelp
 import com.cboyxd.gitlab.notifications.Finding
 import com.cboyxd.gitlab.notifications.GitLabNotificationMonitor
 import com.cboyxd.gitlab.notifications.InstantNotificationService
@@ -94,6 +100,8 @@ fun NotificationSettingsRoute(onBack: () -> Unit, onOpenDiagnostics: () -> Unit)
   val settings = remember { InstantSettings(context.applicationContext) }
   var instant by remember { mutableStateOf(settings.enabled) }
   var interval by remember { mutableIntStateOf(settings.intervalSeconds) }
+  val card = remember { BatteryCardState(context.applicationContext) }
+  var cardDismissed by remember { mutableStateOf(card.dismissed) }
   NotificationSettingsScreen(
     diagnostics = diagnostics,
     onBack = onBack,
@@ -112,6 +120,14 @@ fun NotificationSettingsRoute(onBack: () -> Unit, onOpenDiagnostics: () -> Unit)
       interval = it
       // The running service reads the interval on its next round; wake it so that's now.
       InstantNotificationService.sync(context)
+    },
+    battery = BatteryHelp.forManufacturer(Build.MANUFACTURER),
+    showBatteryCard = diagnostics != null && BatteryHelp.showCard(instant, diagnostics.ignoringBatteryOptimizations, cardDismissed),
+    onAllowBackground = { BatteryHelp.requestExemption(context) },
+    onOpenGuide = { BatteryHelp.openGuide(context, it) },
+    onDismissBatteryCard = {
+      card.dismissed = true
+      cardDismissed = true
     },
   )
 }
@@ -152,6 +168,11 @@ fun NotificationSettingsScreen(
   intervalSeconds: Int = InstantSettings.DEFAULT_INTERVAL,
   onSetInstant: (Boolean) -> Unit = {},
   onSetInterval: (Int) -> Unit = {},
+  battery: OemBatteryHelp? = null,
+  showBatteryCard: Boolean = false,
+  onAllowBackground: () -> Unit = {},
+  onOpenGuide: (String) -> Unit = {},
+  onDismissBatteryCard: () -> Unit = {},
 ) {
   Column(modifier = modifier.fillMaxSize().background(Gl.colors.bg)) {
     GlTopBar(title = "Notifications", onBack = onBack)
@@ -192,6 +213,7 @@ fun NotificationSettingsScreen(
             modifier = Modifier.padding(bottom = GlSpace.tight),
           )
         }
+        if (showBatteryCard) BatteryCard(onAllow = onAllowBackground, onDismiss = onDismissBatteryCard)
         GlDivider()
       }
       item(key = "summary") {
@@ -215,6 +237,14 @@ fun NotificationSettingsScreen(
           subtitle = "Permission, categories and sounds",
           leading = { Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null, tint = Gl.colors.textSecondary) },
           onClick = onOpenSystemSettings,
+        )
+      }
+      if (battery != null) item(key = "battery") {
+        BatterySection(
+          optimized = diagnostics?.ignoringBatteryOptimizations?.not(),
+          help = battery,
+          onAllow = onAllowBackground,
+          onOpenGuide = onOpenGuide,
         )
       }
       item(key = "how") {
@@ -409,4 +439,66 @@ private fun HistoryRow(run: PollRun, now: Long) {
     subtitle = listOf(details, errors).filter { it.isNotBlank() }.joinToString("\n"),
     leading = { SeverityIcon(severity) },
   )
+}
+
+@Composable
+private fun BatteryCard(onAllow: () -> Unit, onDismiss: () -> Unit) {
+  GlCard(
+    modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight).testTag("battery_card"),
+    contentPadding = PaddingValues(GlSpace.margin),
+  ) {
+    Row(verticalAlignment = Alignment.Top) {
+      Icon(Icons.Outlined.BatteryAlert, contentDescription = null, tint = Gl.colors.warning, modifier = Modifier.size(24.dp))
+      Spacer(Modifier.width(16.dp))
+      Column(modifier = Modifier.weight(1f)) {
+        Text("Keep instant notifications running", style = Gl.type.label, color = Gl.colors.textPrimary)
+        Text(
+          "Android optimizes GitLab Mobile's battery use, so it can pause checks while the phone is idle. " +
+            "Allow background use to keep notifications on time.",
+          style = Gl.type.meta,
+          color = Gl.colors.textSecondary,
+        )
+      }
+    }
+    Row(modifier = Modifier.fillMaxWidth().padding(top = GlSpace.tight), horizontalArrangement = Arrangement.End) {
+      GlButton(text = "Not now", onClick = onDismiss, kind = GlButtonKind.Ghost)
+      Spacer(Modifier.width(GlSpace.tight))
+      GlButton(text = "Allow", onClick = onAllow, modifier = Modifier.testTag("battery_allow"))
+    }
+  }
+}
+
+@Composable
+private fun BatterySection(optimized: Boolean?, help: OemBatteryHelp, onAllow: () -> Unit, onOpenGuide: (String) -> Unit) {
+  GlSectionHeader(title = "Battery")
+  val allow: (@Composable RowScope.() -> Unit)? = if (optimized == true) {
+    { GlButton(text = "Allow", onClick = onAllow, kind = GlButtonKind.Secondary) }
+  } else null
+  GlRow(
+    title = "Battery optimization",
+    subtitle = when (optimized) {
+      null -> "Checking…"
+      true -> "On: Android can postpone checks while the phone is idle"
+      false -> "Off: checks aren't postponed by Doze"
+    },
+    leading = {
+      Icon(
+        Icons.Outlined.BatteryAlert,
+        contentDescription = null,
+        tint = if (optimized == true) Gl.colors.warning else Gl.colors.textSecondary,
+      )
+    },
+    trailing = allow,
+  )
+  Column(modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight)) {
+    Text("${help.maker} battery manager", style = Gl.type.label, color = Gl.colors.textPrimary)
+    Text(help.steps, style = Gl.type.bodySmall, color = Gl.colors.textSecondary)
+    GlButton(
+      text = "Open the guide on dontkillmyapp.com",
+      onClick = { onOpenGuide(help.guideUrl) },
+      kind = GlButtonKind.Ghost,
+      icon = Icons.AutoMirrored.Outlined.OpenInNew,
+      modifier = Modifier.padding(top = 4.dp),
+    )
+  }
 }

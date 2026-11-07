@@ -22,6 +22,12 @@ Turn on under **Manage accounts → Notifications → Instant notifications**. A
 - **Restarts.** The service restarts after a reboot (`BOOT_COMPLETED`) and an app update (`MY_PACKAGE_REPLACED`), and whenever the app is opened. If Android stops it and refuses a background restart (Android 12+), WorkManager keeps checking and diagnostics says the service isn't running.
 - It stops itself when the last account signs out or the setting is turned off, including from the **Turn off** action on its notification.
 
+## Battery helper
+
+**Notifications → Battery** shows whether Android optimizes the app's battery use. **Allow** asks Android to stop (the system's own dialog, `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`). Below that are steps for the phone maker's own battery manager (Xiaomi Autostart, Samsung Never sleeping apps, Huawei App launch and others) and a link to that maker's page on [dontkillmyapp.com](https://dontkillmyapp.com/). When instant notifications are turned on while the app is still optimized, a one-time card offers the same.
+
+The direct request is controlled by `BuildConfig.REQUEST_BATTERY_EXEMPTION` (true in the GitHub build). A Play flavor sets it to false and removes the `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission; the button then opens the system's battery optimization list instead.
+
 ## Diagnostics
 
 **Notifications → Diagnostics** shows what holds notifications back on this phone: notification permission and categories, the App Standby Bucket, battery optimization, background restriction, Data Saver, Battery Saver, the next run WorkManager plans and the reason Android last stopped it, each account's last result, and a local log of recent checks (background, instant and in-app kept apart). **Check now** runs a check immediately.

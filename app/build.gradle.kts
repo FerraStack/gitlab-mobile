@@ -17,6 +17,10 @@ android {
     versionName = "1.4.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    // The GitHub build may ask Android directly to stop optimizing the app's battery use. A
+    // future Google Play flavor sets this to false (Play restricts that request) and removes the
+    // REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission; see docs/notifications.md.
+    buildConfigField("boolean", "REQUEST_BATTERY_EXEMPTION", "true")
   }
 
   signingConfigs {
