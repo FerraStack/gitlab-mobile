@@ -1,7 +1,7 @@
 # GitLab Mobile
 
-[![CI](https://github.com/CBoYXD/gitlab-mobile/actions/workflows/ci.yml/badge.svg)](https://github.com/CBoYXD/gitlab-mobile/actions/workflows/ci.yml)
-[Download the latest release](https://github.com/CBoYXD/gitlab-mobile/releases/latest)
+[![CI](https://github.com/FerraStack/gitlab-mobile/actions/workflows/ci.yml/badge.svg)](https://github.com/FerraStack/gitlab-mobile/actions/workflows/ci.yml)
+[Download the latest release](https://github.com/FerraStack/gitlab-mobile/releases/latest)
 
 A native Android client for GitLab.com and self-hosted GitLab servers, built with Jetpack Compose. It is laid out like GitHub Mobile and colored like GitLab: read code with syntax highlighting, review merge requests and diffs, follow pipelines down to the job log, and write Markdown with a real editor. Without an account it opens as a guest on GitLab.com's public projects.
 
@@ -121,4 +121,4 @@ Code and job logs use bundled [Liberation Mono](https://github.com/liberationfon
 
 ## License
 
-No license has been chosen yet, so default copyright applies. Add a `LICENSE` file before accepting contributions.
+Licensed under the [Apache License 2.0](LICENSE). Part of [FerraStack](https://github.com/FerraStack), a set of open-source developer tools for Android.
