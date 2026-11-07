@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Opt-in instant notifications: a foreground service that polls GitLab (no push service exists). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:name=".GitLabApplication"
@@ -37,6 +42,29 @@
                     android:scheme="com.cboyxd.gitlab" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".notifications.InstantNotificationService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Opt-in polling of the user's GitLab servers for new to-dos, review requests and merge request updates, because GitLab has no push service for third-party clients." />
+        </service>
+
+        <receiver
+            android:name=".notifications.InstantAlarmReceiver"
+            android:exported="false" />
+
+        <!-- Only the system can send these protected broadcasts. -->
+        <receiver
+            android:name=".notifications.InstantStartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

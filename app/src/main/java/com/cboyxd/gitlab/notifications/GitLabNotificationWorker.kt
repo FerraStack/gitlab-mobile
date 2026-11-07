@@ -62,7 +62,9 @@ object GitLabNotificationMonitor {
       // Clear notifications for accounts removed while other accounts remain signed in.
       val manager = context.getSystemService(android.app.NotificationManager::class.java)
       if (android.os.Build.VERSION.SDK_INT >= 23) manager.activeNotifications.forEach { notification ->
-        if (notification.tag?.substringBefore(':') !in accounts.map { it.id }) manager.cancel(notification.tag, notification.id)
+        // Only event notifications carry a tag; the instant service's ongoing one doesn't.
+        val tag = notification.tag ?: return@forEach
+        if (tag.substringBefore(':') !in accounts.map { it.id }) manager.cancel(tag, notification.id)
       }
       var success = true
       val results = accounts.map { account ->

@@ -52,7 +52,7 @@ img() { echo "<img src=\"$base/$1\" width=\"240\" alt=\"$2\">"; }
 # One row per screen: name_light.png / name_dark.png; other PNGs get a row of their own.
 rows() { # $1 = "changed" | "unchanged"
   local name light dark state lc dc
-  for name in $(find "$dir" -maxdepth 1 -name '*.png' -printf '%f\n' \
+  for name in $(find "$dir" -maxdepth 1 -name '*.png' ! -name 'emulator_*' -printf '%f\n' \
     | sed -E 's/_(light|dark)\.png$//; s/\.png$//' | sort -u); do
     light="${name}_light.png"
     dark="${name}_dark.png"
@@ -74,6 +74,7 @@ stale_file="$shots/stale.txt"
 touch "$stale_file"
 stale=$(find "$dir" -maxdepth 1 -name '*.png' -printf '%f\n' | grep -xFf "$stale_file" | sort || true)
 
+emulator_shots=$(find "$dir" -maxdepth 1 -name 'emulator_*.png' -printf '%f\n' | sort)
 changed_rows=$(rows changed)
 unchanged_rows=$(rows unchanged)
 {
@@ -94,6 +95,12 @@ unchanged_rows=$(rows unchanged)
     echo
     echo "> [!NOTE]"
     echo "> Not yet committed in \`app/src/test/screenshots\` (record with \`./gradlew :app:recordRoborazziDebug\`, or copy them from this run's \`screenshots-…\` artifact): $(echo "$stale" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')"
+  fi
+  if [[ -n $emulator_shots ]]; then
+    echo
+    echo "**Emulator** (Pixel 7 profile, API 35, end-to-end test against a fake GitLab):"
+    echo
+    for f in $emulator_shots; do echo "$(img "$f" "${f%.png}")"; done
   fi
   if [[ -n $unchanged_rows ]]; then
     echo
