@@ -28,9 +28,10 @@ jobs:
         run: find app/src/test/screenshots -name '*.png' -delete
       - name: Run unit and Compose tests, lint, and build debug APKs
         # Most UI tests run on Robolectric; compile the device smoke test as well.
-        # Screenshot tests record their images so pull requests can show them.
+        # Screenshot tests record their images so pull requests can show them. The images aren't
+        # task outputs, so a test task restored from the build cache would record none: --rerun.
         run: >-
-          ./gradlew :app:testDebugUnitTest :app:lintDebug
+          ./gradlew :app:testDebugUnitTest --rerun :app:lintDebug
           :app:assembleDebug :app:assembleDebugAndroidTest
           -Proborazzi.test.record=true
           --continue --stacktrace --console=plain
