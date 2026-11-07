@@ -117,6 +117,8 @@ import com.cboyxd.gitlab.ui.theme.glTween
 import com.cboyxd.gitlab.ui.viewmodel.BottomTab
 import com.cboyxd.gitlab.ui.viewmodel.GitLabViewModel
 import com.cboyxd.gitlab.ui.viewmodel.ScreenDestination
+import com.cboyxd.gitlab.ui.screens.NotificationDiagnosticsRoute
+import com.cboyxd.gitlab.ui.screens.NotificationSettingsRoute
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
@@ -486,7 +488,13 @@ private fun Destination(
       onSignInWithToken = viewModel::signInWithToken,
       onClearLogin = viewModel::clearLoginState,
       onBack = back,
+      onOpenNotifications = { viewModel.navigateTo(ScreenDestination.NotificationSettings) },
     )
+    ScreenDestination.NotificationSettings -> NotificationSettingsRoute(
+      onBack = back,
+      onOpenDiagnostics = { viewModel.navigateTo(ScreenDestination.NotificationDiagnostics) },
+    )
+    ScreenDestination.NotificationDiagnostics -> NotificationDiagnosticsRoute(onBack = back)
     is ScreenDestination.ProjectDetail -> ProjectDetailScreen(
       state = project,
       pendingStar = project.projectId in uiState.pendingStars,
