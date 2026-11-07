@@ -70,6 +70,10 @@ rows() { # $1 = "changed" | "unchanged"
   done
 }
 
+stale_file="$shots/stale.txt"
+touch "$stale_file"
+stale=$(find "$dir" -maxdepth 1 -name '*.png' -printf '%f\n' | grep -xFf "$stale_file" | sort || true)
+
 changed_rows=$(rows changed)
 unchanged_rows=$(rows unchanged)
 {
@@ -78,13 +82,18 @@ unchanged_rows=$(rows unchanged)
   echo "Commit ${SHA:0:7} · [run $RUN_ID](https://github.com/${REPO}/actions/runs/${RUN_ID}) · Roborazzi on Robolectric with invented data"
   echo
   if [[ -n $changed_rows ]]; then
-    echo "**Different from the images committed in \`app/src/test/screenshots\`:**"
+    echo "**Changed by this pull request** (different from the base branch):"
     echo
     echo "| Screen | Light | Dark |"
     echo "|---|---|---|"
     echo "$changed_rows"
   else
-    echo "No screenshot differs from the images committed in \`app/src/test/screenshots\`."
+    echo "No screenshot differs from the base branch."
+  fi
+  if [[ -n $stale ]]; then
+    echo
+    echo "> [!NOTE]"
+    echo "> Not yet committed in \`app/src/test/screenshots\` (record with \`./gradlew :app:recordRoborazziDebug\`, or copy them from this run's \`screenshots-…\` artifact): $(echo "$stale" | sed 's/.*/`&`/' | paste -sd, - | sed 's/,/, /g')"
   fi
   if [[ -n $unchanged_rows ]]; then
     echo
