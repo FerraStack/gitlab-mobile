@@ -1,0 +1,34 @@
+name: Prune PR screenshots
+
+# Removes a closed (merged or abandoned) pull request's images from the
+# ci-screenshots branch that CI publishes them to.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screenshots-prune-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Remove screenshots of the closed PR
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: .github/scripts/prune-screenshots.sh

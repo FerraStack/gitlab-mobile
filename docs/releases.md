@@ -4,7 +4,7 @@
 
 The `CI` workflow runs on pull requests into `main` and pushes to `main` when changes touch `app/**`, `gradle/**`, root Gradle build files/properties/wrappers or `.github/workflows/**`, `.github/actions/**`, `.github/scripts/**`. Changes only to README, `docs/**`, repository metadata or asset-generation tools skip CI entirely. A mixed change still runs CI if any file matches a build input.
 
-Manual dispatch and the CI called by `Release` always run the full checks, independently of path filters. `Release` only starts on version-tag pushes or manual dispatch, so documentation-only branch pushes never start a release. Creating a version tag is an explicit release request and always runs checks and builds, even if the tagged commit only changed documentation. CI requires no signing secrets, including for fork pull requests.
+Manual dispatch and the checks called by `Release` (`.github/workflows/android-checks.yml`, shared with CI) always run the full checks, independently of path filters. `Release` only starts on version-tag pushes or manual dispatch, so documentation-only branch pushes never start a release. Creating a version tag is an explicit release request and always runs checks and builds, even if the tagged commit only changed documentation. CI requires no signing secrets, including for fork pull requests.
 
 To explicitly run all checks after a documentation-only change, use **Actions → CI → Run workflow** or:
 
@@ -24,7 +24,13 @@ The checks are:
 
 Test XML and HTML reports and lint reports are uploaded even when checks fail, with a 14-day retention period. A fresh runner generates its own debug signing key, so APKs from separate CI runs may require uninstalling an older debug install first. Locally, an existing root `debug.keystore` remains supported.
 
-Screenshot capture tests run with the unit tests. Pixel comparisons remain an explicit local check with `./gradlew :app:verifyRoborazziDebug`; update expected images intentionally with `./gradlew :app:recordRoborazziDebug` and review the image diff before committing.
+Screenshot tests run with the unit tests. CI records them (`-Proborazzi.test.record=true`) and saves them as the run's `screenshots-…` artifact. Pixel comparisons remain an explicit local check with `./gradlew :app:verifyRoborazziDebug`; update expected images intentionally with `./gradlew :app:recordRoborazziDebug` and review the image diff before committing.
+
+## Screenshots on pull requests
+
+For pull requests from branches of this repository, CI publishes the recorded screenshots to the orphan `ci-screenshots` branch under `pr-<number>/<run>-<attempt>/` and posts them as one comment on the pull request, marked with a hidden `<!-- ferra-screenshots -->` line and updated in place on every run. Screens whose images differ from the ones committed in `app/src/test/screenshots` are listed first; the rest are folded. Fork pull requests receive a read-only token, so their screenshots stay in the run's artifacts.
+
+Only the posting job may write: it pushes to `ci-screenshots` and edits the comment (`contents: write`, `pull-requests: write`); the checks run with `contents: read`. When a pull request is closed, `Prune PR screenshots` removes its folder and rewrites `ci-screenshots` as a single commit, so old images stop taking space. Workflow actions are pinned to commit SHAs with the release in a comment.
 
 Do not make this path-filtered workflow an unconditional required check in branch protection: documentation-only PRs intentionally have no CI run, so GitHub would leave that check pending.
 

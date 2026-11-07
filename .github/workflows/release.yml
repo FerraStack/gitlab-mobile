@@ -21,7 +21,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Require a version tag matching the app
@@ -30,7 +30,7 @@ jobs:
 
   ci:
     needs: version
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/android-checks.yml
 
   build:
     name: Build signed APK and app bundle
@@ -40,7 +40,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -91,7 +91,7 @@ jobs:
           cd dist
           sha256sum -- *.apk *.aab > SHA256SUMS
       - name: Save release artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/
@@ -111,7 +111,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist

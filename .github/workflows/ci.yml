@@ -28,49 +28,47 @@ on:
       - '.github/actions/**'
       - '.github/scripts/**'
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  # A release calls this workflow too; its checks must not cancel a branch's CI.
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
 
 jobs:
   android:
-    name: Android (tests, lint, APK)
+    uses: ./.github/workflows/android-checks.yml
+
+  screenshots:
+    name: Post screenshots on the PR
+    needs: android
+    # Fork PRs get a read-only token; their screenshots stay in the run's artifacts.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 10
+    # Pushes to the ci-screenshots branch and edits one PR comment; runs no PR code
+    # except the checked-out posting script, which the same-repo gate above protects.
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Test release notes generation
-        run: python3 -m unittest discover -s .github/scripts/tests -v
-      - uses: ./.github/actions/setup-android
-      - name: Run unit and Compose tests, lint, and build debug APKs
-        # Most UI tests run on Robolectric; compile the device smoke test as well.
-        run: >-
-          ./gradlew :app:testDebugUnitTest :app:lintDebug
-          :app:assembleDebug :app:assembleDebugAndroidTest
-          --continue --stacktrace --console=plain
-      - name: Save test and lint reports, including failures
-        if: always()
-        uses: actions/upload-artifact@v7
+          sparse-checkout: .github/scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: android-reports-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            app/build/reports/
-            app/build/test-results/
-            app/build/outputs/roborazzi/
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Save installable debug APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: gitlab-mobile-debug-${{ github.sha }}-${{ github.run_attempt }}
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14
+          name: screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: shots
+      - name: Publish to ci-screenshots and update the PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/post-screenshots.sh shots

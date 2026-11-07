@@ -1,0 +1,70 @@
+name: Android checks
+
+# The checks shared by CI and Release. Kept separate from ci.yml so that CI's
+# pull-request-only screenshot job (which needs write permissions) is never part
+# of the workflow Release calls with read-only permissions.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android (tests, lint, APK)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test release notes generation
+        run: python3 -m unittest discover -s .github/scripts/tests -v
+      - uses: ./.github/actions/setup-android
+      - name: Remove committed screenshots so every saved image comes from this run
+        run: find app/src/test/screenshots -name '*.png' -delete
+      - name: Run unit and Compose tests, lint, and build debug APKs
+        # Most UI tests run on Robolectric; compile the device smoke test as well.
+        # Screenshot tests record their images so pull requests can show them.
+        run: >-
+          ./gradlew :app:testDebugUnitTest :app:lintDebug
+          :app:assembleDebug :app:assembleDebugAndroidTest
+          -Proborazzi.test.record=true
+          --continue --stacktrace --console=plain
+      - name: List screenshots that differ from the committed ones
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p screenshots
+          find app/src/test/screenshots -name '*.png' -exec cp {} screenshots/ \;
+          # Modified or new images; byte-identical re-recordings don't show up.
+          git status --porcelain --untracked-files=all -- app/src/test/screenshots \
+            | awk '$1 == "M" || $1 == "??" { print $2 }' \
+            | xargs -r -n1 basename > screenshots/changed.txt
+          echo "Changed: $(wc -l < screenshots/changed.txt) of $(find screenshots -name '*.png' | wc -l)"
+      - name: Save screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Save test and lint reports, including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            app/build/reports/
+            app/build/test-results/
+            app/build/outputs/roborazzi/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Save installable debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gitlab-mobile-debug-${{ github.sha }}-${{ github.run_attempt }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
