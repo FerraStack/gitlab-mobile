@@ -14,6 +14,7 @@ internal data class GitLabNotificationEvent(
   val url: String,
   val channel: String,
   val createdAt: Long = System.currentTimeMillis(),
+  val accountName: String = "",
 )
 
 /** Small per-account cursors and a durable deduplication window survive app restarts. */

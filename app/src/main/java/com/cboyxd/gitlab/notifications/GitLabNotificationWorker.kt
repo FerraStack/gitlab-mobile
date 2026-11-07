@@ -176,7 +176,7 @@ object GitLabNotificationMonitor {
         }
         if (title != null) {
           val actor = (if (mr.state == "merged") mr.mergeUser ?: mr.mergedBy else mr.closedBy)?.let { it.name.ifBlank { it.username } }
-          deliver(context, saved, delivered, mrEvent(account, mr, "state:${mr.state}:${mr.mergedAt ?: mr.closedAt ?: mr.updatedAt}", title, GitLabNotifications.ACTIVITY, actor))
+          deliver(context, saved, delivered, mrEvent(account, mr, "state:${mr.state}:${mr.mergedAt ?: mr.closedAt ?: mr.updatedAt}", title, GitLabNotifications.ACTIVITY, actor, changedAt.takeIf { it > 0 }))
         }
       }
       list.forEach { previous.put(mrKey(it), it.state) }
@@ -195,7 +195,7 @@ object GitLabNotificationMonitor {
     val old = saved.snapshot(account.id, feed)
     if (saved.cursor(account.id, feed) > 0) list.forEach { mr ->
       if (!old.has(mrKey(mr))) {
-        deliver(context, saved, delivered, mrEvent(account, mr, "$feed:${mr.updatedAt}", if (feed == "review") "Review requested from you" else "Merge request assigned to you", GitLabNotifications.REVIEWS))
+        deliver(context, saved, delivered, mrEvent(account, mr, "$feed:${mr.updatedAt}", if (feed == "review") "Review requested from you" else "Merge request assigned to you", GitLabNotifications.REVIEWS, at = parseGitLabMillis(mr.updatedAt)))
       }
     }
     val next = JSONObject()
@@ -210,11 +210,12 @@ object GitLabNotificationMonitor {
 
   private fun mrKey(mr: GitLabMergeRequest) = "${mr.projectId}:${mr.iid}"
 
-  private fun mrEvent(account: GitLabInstance, mr: GitLabMergeRequest, suffix: String, title: String, channel: String, actor: String? = null): GitLabNotificationEvent {
+  /** [at] is when it happened, as far as GitLab says; it decides whether delivery counts as late. */
+  private fun mrEvent(account: GitLabInstance, mr: GitLabMergeRequest, suffix: String, title: String, channel: String, actor: String? = null, at: Long? = null): GitLabNotificationEvent {
     val project = mr.webUrl.substringBefore("/-/").substringAfter("://").substringAfter('/')
     return GitLabNotificationEvent("mr:${mrKey(mr)}:$suffix", account.id, title,
       listOfNotNull("!${mr.iid} ${mr.title}", project.takeIf { it.isNotBlank() }, actor?.takeIf { it.isNotBlank() }?.let { "By $it" }, account.name).joinToString("\n"),
-      "MergeRequest", mr.projectId, mr.iid, mr.webUrl, channel)
+      "MergeRequest", mr.projectId, mr.iid, mr.webUrl, channel, at ?: System.currentTimeMillis(), accountName = account.name)
   }
 
   private fun eventForTodo(account: GitLabInstance, todo: GitLabTodo): GitLabNotificationEvent? {
@@ -239,7 +240,7 @@ object GitLabNotificationMonitor {
     return GitLabNotificationEvent("todo:${todo.id}", account.id, title,
       listOf("$number$targetTitle", todo.project?.pathWithNamespace.orEmpty(), "From ${todo.author.name.ifBlank { todo.author.username }} · ${account.name}").filter { it.isNotBlank() }.joinToString("\n"),
       todo.targetType.orEmpty(), todo.target?.projectId ?: todo.project?.id ?: 0, todo.target?.iid ?: 0, todo.targetUrl.orEmpty(), channel,
-      parseGitLabMillis(todo.createdAt) ?: System.currentTimeMillis())
+      parseGitLabMillis(todo.createdAt) ?: System.currentTimeMillis(), accountName = account.name)
   }
 
   private fun iso(time: Long): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(time))
