@@ -41,7 +41,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -311,7 +311,11 @@ fun DiffLineRow(
     modifier = modifier
       .fillMaxWidth()
       .then(if (onClick != null) Modifier.clickable(onClickLabel = "Comment on this line", onClick = onClick) else Modifier)
-      .drawBehind { if (commented) drawRect(markColor, size = Size(3.dp.toPx(), size.height)) }
+      // Drawn over the line (not behind it), or the add/remove background below would cover it.
+      .drawWithContent {
+        drawContent()
+        if (commented) drawRect(markColor, size = Size(4.dp.toPx(), size.height))
+      }
       .then(if (scrollState != null) Modifier.horizontalScroll(scrollState).width(codeWidth) else Modifier)
       .height(IntrinsicSize.Min)
       .background(bg)
