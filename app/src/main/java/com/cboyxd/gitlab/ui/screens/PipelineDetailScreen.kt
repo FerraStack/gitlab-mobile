@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.KeyboardDoubleArrowDown
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Close
@@ -92,6 +93,7 @@ import com.cboyxd.gitlab.ui.theme.CodeFont
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.JobDetailState
+import com.cboyxd.gitlab.ui.viewmodel.formatBytes
 import com.cboyxd.gitlab.ui.viewmodel.PipelineDetailState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -407,6 +409,8 @@ fun JobDetailScreen(
   modifier: Modifier = Modifier,
   onPlayJob: () -> Unit = {},
   onCancelJob: () -> Unit = {},
+  /** Asks where to save the artifacts; the argument is the suggested file name. */
+  onDownloadArtifacts: (String) -> Unit = {},
 ) {
   val job = state.job.data
   val c = Gl.colors
@@ -487,6 +491,17 @@ fun JobDetailScreen(
               }
             }
           }
+        }
+        // Public projects' artifacts download without signing in, so guests get the button too.
+        job.artifactsFile?.let { artifacts ->
+          GlButton(
+            text = "Download artifacts · ${formatBytes(artifacts.size)}",
+            onClick = { onDownloadArtifacts(artifactsFileName(job, artifacts.filename)) },
+            kind = GlButtonKind.Secondary,
+            loading = state.busy,
+            icon = Icons.Outlined.Download,
+            modifier = Modifier.padding(start = GlSpace.margin, end = GlSpace.margin, bottom = GlSpace.margin).testTag("download_artifacts"),
+          )
         }
         GlDivider()
         JobLog(state = state, onRetryLoad = onRetryLoad, modifier = Modifier.weight(1f))
@@ -627,3 +642,10 @@ private fun humanFailure(reason: String): String = when (reason) {
 
 /** Job states GitLab can cancel. */
 private val JOB_ACTIVE = setOf("running", "pending", "created", "preparing", "waiting_for_resource", "scheduled")
+
+/** "deploy-staging-42-artifacts.zip": names that stay apart in Downloads. */
+internal fun artifactsFileName(job: GitLabJob, serverName: String): String {
+  val ext = if (serverName.endsWith(".tar.gz")) "tar.gz" else serverName.substringAfterLast('.', "zip").ifBlank { "zip" }
+  val name = job.name.replace(Regex("[^A-Za-z0-9._-]+"), "-").trim('-').ifBlank { "job" }
+  return "$name-${job.id}-artifacts.$ext"
+}

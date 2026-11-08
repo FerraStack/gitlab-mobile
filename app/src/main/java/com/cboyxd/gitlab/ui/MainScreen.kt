@@ -2,6 +2,9 @@ package com.cboyxd.gitlab.ui
 
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.provider.DocumentsContract
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import android.content.Intent
 import android.net.Uri
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -622,7 +625,18 @@ private fun Destination(
       onOpenInBrowser = browser,
       onPlayJob = { viewModel.ci.playJob(uiState.pipelineDetail.projectId, it.id) },
     )
-    is ScreenDestination.JobDetail -> JobDetailScreen(
+    is ScreenDestination.JobDetail -> {
+      // The user picks where to save; the app streams the archive there itself, so the token
+      // never goes to the system download manager.
+      val saveArtifacts = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) {
+          viewModel.ci.downloadArtifacts(
+            open = { context.contentResolver.openOutputStream(uri) },
+            discard = { DocumentsContract.deleteDocument(context.contentResolver, uri) },
+          )
+        }
+      }
+      JobDetailScreen(
       state = uiState.jobDetail,
       canWrite = uiState.isSignedIn,
       onBack = back,
@@ -631,7 +645,9 @@ private fun Destination(
       onOpenInBrowser = browser,
       onPlayJob = { viewModel.ci.playJob(uiState.jobDetail.projectId, uiState.jobDetail.jobId) },
       onCancelJob = viewModel.ci::cancelJob,
+      onDownloadArtifacts = { saveArtifacts.launch(it) },
     )
+    }
   }
 }
 

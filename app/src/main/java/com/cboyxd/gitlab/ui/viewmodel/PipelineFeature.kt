@@ -6,10 +6,12 @@ import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.repository.JobTrace
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.min
 
 private val ACTIVE = setOf("running", "pending", "created", "preparing", "waiting_for_resource", "scheduled", "canceling")
@@ -154,6 +156,28 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
     }
   }
 
+  /**
+   * Saves the job's artifacts into the stream [open] gives (a file the user picked). On failure,
+   * [discard] removes that file so a half-written archive isn't left behind.
+   */
+  fun downloadArtifacts(open: () -> java.io.OutputStream?, discard: () -> Unit = {}) {
+    val d = host.state.value.jobDetail
+    val job = d.job.data ?: return
+    if (d.busy) return
+    host.state.update { it.copy(jobDetail = it.jobDetail.copy(busy = true)) }
+    host.session.launch {
+      val result = host.api { host.repository.downloadJobArtifacts(it, d.projectId, job.id, open) }
+      host.state.update { it.copy(jobDetail = it.jobDetail.copy(busy = false)) }
+      result.fold(
+        onSuccess = { bytes -> host.notify("Saved artifacts (${formatBytes(bytes)})") },
+        onFailure = {
+          withContext(Dispatchers.IO) { runCatching(discard) }
+          host.notifyError(it.userMessage())
+        },
+      )
+    }
+  }
+
   /** Cancels the running job on the job page. */
   fun cancelJob() {
     val d = host.state.value.jobDetail
@@ -228,4 +252,17 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
       )
     }
   }
+}
+
+/** "740 B", "3.1 MB", "12 KB": one decimal below 10, whole numbers above. */
+fun formatBytes(bytes: Long): String {
+  if (bytes < 1024) return "$bytes B"
+  val units = listOf("KB", "MB", "GB", "TB")
+  var value = bytes / 1024.0
+  var unit = 0
+  while (value >= 1024 && unit < units.lastIndex) {
+    value /= 1024
+    unit++
+  }
+  return String.format(java.util.Locale.US, if (value < 10) "%.1f %s" else "%.0f %s", value, units[unit])
 }
