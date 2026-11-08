@@ -33,7 +33,11 @@ class ApprovalTest {
 
   private fun show(approvedByMe: Boolean, canWrite: Boolean = true, dark: Boolean = true) {
     val approvers = if (approvedByMe) listOf(GitLabApprovalUser(Fakes.user)) else emptyList()
-    val state = Fakes.mergeRequestDetail().copy(
+    val base = Fakes.mergeRequestDetail()
+    // As GitLab reports it: not mergeable until the required approval is there.
+    val mr = base.mergeRequest.data!!.copy(detailedMergeStatus = if (approvedByMe) "mergeable" else "not_approved")
+    val state = base.copy(
+      mergeRequest = base.mergeRequest.copy(data = mr),
       approvals = Loadable(GitLabApprovals(approved = approvedByMe, approvalsRequired = 1, approvalsLeft = if (approvedByMe) 0 else 1, approvedBy = approvers), loaded = true),
     )
     rule.setContent {
