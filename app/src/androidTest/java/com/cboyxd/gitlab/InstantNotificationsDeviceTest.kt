@@ -144,12 +144,16 @@ class InstantNotificationsDeviceTest {
     }
     assertNotNull("no notification for the new to-do within 90 s", shown)
 
-    // Delivered by the instant service, in its first or second full check.
-    val fullChecks = PollLog(context).runs()
+    // Delivered by the instant service, in its first or second full check. The notification is
+    // posted during the check and the check is logged when it ends, so wait for the log.
+    fun fullChecks() = PollLog(context).runs()
       .filter { it.trigger == PollTrigger.INSTANT && it.outcome != PollOutcome.UNCHANGED }
       .sortedBy { it.startedAt }
-    val delivering = fullChecks.indexOfFirst { it.delivered > 0 }
-    assertTrue("delivered by check ${delivering + 1} of ${fullChecks.size}", delivering in 0..1)
+    val logDeadline = SystemClock.elapsedRealtime() + 20_000
+    while (fullChecks().none { it.delivered > 0 } && SystemClock.elapsedRealtime() < logDeadline) SystemClock.sleep(250)
+    val checks = fullChecks()
+    val delivering = checks.indexOfFirst { it.delivered > 0 }
+    assertTrue("delivered by check ${delivering + 1} of ${checks.size}", delivering in 0..1)
 
     device.openNotification()
     device.wait(Until.hasObject(By.text("You were mentioned")), 10_000)
