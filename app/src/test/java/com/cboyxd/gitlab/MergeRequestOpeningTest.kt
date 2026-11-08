@@ -1,6 +1,9 @@
 package com.cboyxd.gitlab
 
 import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -59,10 +62,10 @@ class MergeRequestOpeningTest {
     assertTrue(mergeRequestReadyToOpen(unknown.copy(mergeRequest = unknown.mergeRequest.success(Fakes.mergeRequests.first()))))
   }
 
-  private fun show(dark: Boolean) = rule.setContent {
+  private fun show(dark: Boolean, state: MergeRequestDetailState = loading()) = rule.setContent {
     GitLabTheme(darkTheme = dark, reducedMotion = true) {
       MergeRequestDetailScreen(
-        state = loading(),
+        state = state,
         labels = Fakes.labels,
         canWrite = true,
         onLink = { false },
@@ -88,5 +91,48 @@ class MergeRequestOpeningTest {
     rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Checking approvals", substring = true))
     rule.onNodeWithText("Checking approvals", substring = true).assertExists()
     rule.onNodeWithText("0 files changed", substring = true).assertDoesNotExist()
+  }
+
+  private fun mergeButton() = rule.onNode(hasTestTag("merge_button"))
+
+  private fun scrollToMerge() = rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("merge_button"))
+
+  @Test
+  fun `merge waits for the fresh merge status and the approvals`() {
+    show(dark = true)
+    scrollToMerge()
+    rule.onNodeWithText("Checking merge status…").assertExists()
+    rule.onNodeWithText("Ready to merge").assertDoesNotExist()
+    mergeButton().assertIsNotEnabled()
+  }
+
+  @Test
+  fun `approvals still loading keep merge disabled`() {
+    val fresh = loading().let { it.copy(mergeRequest = it.mergeRequest.success(Fakes.mergeRequests.first())) }
+    show(dark = true, state = fresh)
+    scrollToMerge()
+    mergeButton().assertIsNotEnabled()
+  }
+
+  @Test
+  fun `the merge request still loading keeps merge disabled`() {
+    val approvalsDone = loading().let { it.copy(approvals = it.approvals.success(GitLabApprovals(approvalsLeft = 0))) }
+    show(dark = true, state = approvalsDone)
+    scrollToMerge()
+    mergeButton().assertIsNotEnabled()
+  }
+
+  @Test
+  fun `merge is offered once both have loaded`() {
+    val ready = loading().let {
+      it.copy(
+        mergeRequest = it.mergeRequest.success(Fakes.mergeRequests.first()),
+        approvals = it.approvals.success(GitLabApprovals(approvalsLeft = 0)),
+      )
+    }
+    show(dark = true, state = ready)
+    scrollToMerge()
+    rule.onNodeWithText("Ready to merge").assertExists()
+    mergeButton().assertIsEnabled()
   }
 }
