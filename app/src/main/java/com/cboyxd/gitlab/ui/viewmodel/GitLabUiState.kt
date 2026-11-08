@@ -151,6 +151,17 @@ data class ProjectDetailState(
   val releases: Loadable<List<GitLabRelease>> = emptyFeed(),
   val contributors: Loadable<List<GitLabContributor>> = emptyFeed(),
   val events: Loadable<List<GitLabEvent>> = emptyFeed(),
+  /** Server-side state filter of [issues]: "opened", "closed" or "all". */
+  val issueState: String = "opened",
+  val issuesNextPage: Int? = null,
+  /** Exact totals per issue state; a state is missing when the server didn't say. */
+  val issueCounts: Map<String, Int> = emptyMap(),
+  /** Server-side state filter of [mergeRequests]: "opened", "merged", "closed" or "all". */
+  val mergeRequestState: String = "opened",
+  val mergeRequestsNextPage: Int? = null,
+  val mergeRequestCounts: Map<String, Int> = emptyMap(),
+  /** A "Load more" request for issues or merge requests is running. */
+  val loadingMore: Boolean = false,
 ) {
   val effectiveRef: String? get() = ref ?: project.data?.defaultBranch
   val webUrl: String? get() = project.data?.webUrl?.takeIf { it.isNotBlank() }

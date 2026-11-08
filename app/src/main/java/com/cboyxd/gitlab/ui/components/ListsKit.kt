@@ -80,7 +80,8 @@ fun <T> ListsDropdownFilter(
   label: (T) -> String,
   onSelect: (T) -> Unit,
   modifier: Modifier = Modifier,
-  countOf: ((T) -> Int)? = null,
+  /** Count shown beside each option; null for an option leaves it out (not known). */
+  countOf: ((T) -> Int?)? = null,
   active: Boolean = false,
 ) {
   val c = Gl.colors
@@ -117,9 +118,9 @@ fun <T> ListsDropdownFilter(
           text = {
             Row(verticalAlignment = Alignment.CenterVertically) {
               Text(label(option), style = Gl.type.body, color = c.textPrimary, modifier = Modifier.weight(1f, fill = false))
-              countOf?.let {
+              countOf?.invoke(option)?.let { count ->
                 Spacer(Modifier.width(12.dp))
-                Text(it(option).toString(), style = Gl.type.numeric, color = c.textSecondary)
+                Text(count.toString(), style = Gl.type.numeric, color = c.textSecondary)
               }
             }
           },

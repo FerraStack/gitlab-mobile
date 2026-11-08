@@ -52,6 +52,9 @@ import javax.net.ssl.SSLException
 
 data class JobTrace(val text: String, val truncated: Boolean)
 
+/** One page of a list and the page after it, or null when this was the last. */
+data class ListPage<T>(val items: List<T>, val nextPage: Int?)
+
 data class ConnectionProbe(
   val version: String,
   val username: String,
@@ -224,9 +227,21 @@ class GitLabRepository {
     service(instance).getIssue(projectId, iid).requireBody().withDisplayTimes()
   }
 
-  suspend fun getProjectIssues(instance: GitLabInstance, projectId: Long): Result<List<GitLabIssue>> = call {
-    fetchPages(maxPages = 1) { page -> service(instance).getProjectIssues(projectId, perPage = 50, page = page) }
-      .map { it.withDisplayTimes() }
+  /** One page of a project's issues in [state] ("opened", "closed" or "all"), newest activity first. */
+  suspend fun getProjectIssues(instance: GitLabInstance, projectId: Long, state: String = "opened", page: Int = 1): Result<ListPage<GitLabIssue>> = call {
+    val response = service(instance).getProjectIssues(projectId, state = state, perPage = PROJECT_PAGE_SIZE, page = page)
+    if (!response.isSuccessful) throw response.toGitLabException()
+    ListPage(response.body().orEmpty().map { it.withDisplayTimes() }, nextPage(response, page))
+  }
+
+  /** Exact issue counts per state ("opened", "closed", "all") from issues_statistics; missing when unknown. */
+  suspend fun getProjectIssueStateCounts(instance: GitLabInstance, projectId: Long): Result<Map<String, Int>> = call {
+    val counts = countOrNullValue { service(instance).getIssueStatistics(projectId).takeIf { it.isSuccessful }?.body()?.statistics?.counts }
+    buildMap {
+      counts?.opened?.let { put("opened", it) }
+      counts?.closed?.let { put("closed", it) }
+      counts?.all?.let { put("all", it) }
+    }
   }
 
   suspend fun createIssue(
@@ -313,10 +328,29 @@ class GitLabRepository {
     service(instance).getMergeRequest(projectId, iid).requireBody().withDisplayTimes()
   }
 
-  suspend fun getProjectMergeRequests(instance: GitLabInstance, projectId: Long): Result<List<GitLabMergeRequest>> = call {
-    fetchPages(maxPages = 1) { page -> service(instance).getProjectMergeRequests(projectId, perPage = 50, page = page) }
-      .map { it.withDisplayTimes() }
+  /** One page of a project's merge requests in [state] ("opened", "merged", "closed" or "all"). */
+  suspend fun getProjectMergeRequests(instance: GitLabInstance, projectId: Long, state: String = "opened", page: Int = 1): Result<ListPage<GitLabMergeRequest>> = call {
+    val response = service(instance).getProjectMergeRequests(projectId, state = state, perPage = PROJECT_PAGE_SIZE, page = page)
+    if (!response.isSuccessful) throw response.toGitLabException()
+    ListPage(response.body().orEmpty().map { it.withDisplayTimes() }, nextPage(response, page))
   }
+
+  /** Exact merge request counts per state, from the X-Total of one-item pages; missing when unknown. */
+  suspend fun getProjectMergeRequestStateCounts(instance: GitLabInstance, projectId: Long): Result<Map<String, Int>> = call {
+    val service = service(instance)
+    coroutineScope {
+      listOf("opened", "merged", "closed", "all").map { state ->
+        async {
+          state to countOrNull {
+            service.countProjectMergeRequests(projectId, state = state).takeIf { it.isSuccessful }?.headers()?.get("X-Total")?.toIntOrNull()
+          }
+        }
+      }.map { it.await() }.mapNotNull { (state, count) -> count?.let { state to it } }.toMap()
+    }
+  }
+
+  private fun nextPage(response: Response<*>, page: Int): Int? =
+    response.headers()["X-Next-Page"]?.toIntOrNull()?.takeIf { it > page }
 
   /**
    * Exact open issue and merge request counts. The project's own open_issues_count is a cached
@@ -847,6 +881,14 @@ class GitLabRepository {
   }
 
   /** One half of [getProjectCounts]: any failure (network, parsing, HTTP) only blanks that count. */
+  private suspend fun <T> countOrNullValue(block: suspend () -> T?): T? = try {
+    block()
+  } catch (cancel: CancellationException) {
+    throw cancel
+  } catch (_: Exception) {
+    null
+  }
+
   private suspend fun countOrNull(block: suspend () -> Int?): Int? = try {
     block()
   } catch (cancel: CancellationException) {
@@ -919,6 +961,7 @@ class GitLabRepository {
     val README_FILES = listOf("README.md", "README.markdown", "README.rst", "README.txt", "README", "readme.md")
     const val MAX_FILE_BYTES = 400_000L
     const val MAX_TRACE_BYTES = 256_000L
+    const val PROJECT_PAGE_SIZE = 50
   }
 }
 
