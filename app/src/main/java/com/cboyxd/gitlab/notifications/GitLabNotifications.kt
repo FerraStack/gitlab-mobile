@@ -1,6 +1,8 @@
 package com.cboyxd.gitlab.notifications
 
 import android.Manifest
+import android.app.Notification
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -74,7 +76,7 @@ object GitLabNotifications {
   }
 
   /** Posts [event]; false when notifications are off or the permission was just revoked. */
-  internal fun show(context: Context, event: GitLabNotificationEvent): Boolean {
+  internal fun show(context: Context, event: GitLabNotificationEvent, now: Long = System.currentTimeMillis()): Boolean {
     if (!allowed(context)) return false
     val intent = Intent(context, MainActivity::class.java).apply {
       action = ACTION_OPEN
@@ -87,6 +89,8 @@ object GitLabNotifications {
       putExtra(EXTRA_URL, event.url)
     }
     val click = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    // A late check must not make an old event look new: say how old it is instead of a bare time.
+    val delay = NotificationPresentation.delayLabel(event.createdAt, now)
     val notification = NotificationCompat.Builder(context, event.channel)
       .setSmallIcon(R.drawable.ic_notification)
       .setContentTitle(event.title)
@@ -95,18 +99,75 @@ object GitLabNotifications {
       .setContentIntent(click)
       .setAutoCancel(true)
       .setWhen(event.createdAt)
-      .setShowWhen(true)
+      .setShowWhen(delay == null)
+      .setSubText(delay)
       .setCategory(NotificationCompat.CATEGORY_SOCIAL)
       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-      .setGroup("gitlab:${event.accountId}")
+      .setGroup(groupKey(event.accountId))
+      .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
       .build()
     return try {
       NotificationManagerCompat.from(context).notify("${event.accountId}:${event.id}", 0, notification)
+      updateSummary(context, event.accountId, event.accountName)
       true
     } catch (_: SecurityException) {
       // Permission can be revoked between the check and posting.
       false
+    }
+  }
+
+  private fun groupKey(accountId: String) = "gitlab:$accountId"
+
+  private const val SUMMARY = "summary"
+
+  /**
+   * One InboxStyle summary per account once it has two or more visible events, so several
+   * updates collapse into "3 GitLab updates" with a line each instead of a pile of cards.
+   */
+  @SuppressLint("MissingPermission")
+  internal fun updateSummary(context: Context, accountId: String, accountName: String) {
+    val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    val summaryTag = "$accountId:$SUMMARY"
+    val events = manager.activeNotifications
+      .filter { it.tag?.startsWith("$accountId:") == true && it.tag != summaryTag }
+      .sortedByDescending { it.notification.`when` }
+      .map {
+        val extras = it.notification.extras
+        extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty() to
+          extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+      }
+    val summary = NotificationPresentation.summary(accountName, events)
+    if (summary == null) {
+      manager.cancel(summaryTag, 0)
+      return
+    }
+    val style = NotificationCompat.InboxStyle()
+      .setBigContentTitle(summary.title)
+      .setSummaryText(summary.summaryText)
+    summary.lines.forEach { style.addLine(it) }
+    val open = PendingIntent.getActivity(
+      context, 0, Intent(context, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    val notification = NotificationCompat.Builder(context, ACTIVITY)
+      .setSmallIcon(R.drawable.ic_notification)
+      .setContentTitle(summary.title)
+      .setContentText(summary.lines.first())
+      .setSubText(summary.summaryText)
+      .setStyle(style)
+      .setContentIntent(open)
+      .setAutoCancel(true)
+      .setSilent(true)
+      .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+      .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+      .setGroup(groupKey(accountId))
+      .setGroupSummary(true)
+      .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+      .build()
+    try {
+      NotificationManagerCompat.from(context).notify(summaryTag, 0, notification)
+    } catch (_: SecurityException) {
+      // Permission revoked meanwhile.
     }
   }
 }
