@@ -361,11 +361,12 @@ class GitLabRepository {
 
   suspend fun mergeMergeRequest(instance: GitLabInstance, mr: GitLabMergeRequest): Result<GitLabMergeRequest> = call {
     requireToken(instance)
-    val response = service(instance).mergeMergeRequest(mr.projectId, mr.iid)
+    // Pin the merge to the commit the user saw, so commits pushed after the review aren't merged.
+    val response = service(instance).mergeMergeRequest(mr.projectId, mr.iid, sha = mr.sha?.takeIf { it.isNotBlank() })
     when (response.code()) {
       405 -> throw GitLabApiException(405, "This merge request can't be merged yet. Resolve its blocking items in GitLab, then try again.")
       406 -> throw GitLabApiException(406, "This merge request has conflicts. Resolve them, then merge.")
-      409 -> throw GitLabApiException(409, "The source branch changed. Refresh the merge request and try again.")
+      409 -> throw GitLabApiException(409, "The source branch changed since you opened this merge request. Refresh it, review the new commits, then merge.")
     }
     response.requireBody().withDisplayTimes()
   }

@@ -270,7 +270,9 @@ interface GitLabApiService {
   suspend fun mergeMergeRequest(
     @Path("id") projectId: Long,
     @Path("mr_iid") mrIid: Long,
-    @Field("should_remove_source_branch") removeSourceBranch: Boolean = false
+    @Field("should_remove_source_branch") removeSourceBranch: Boolean = false,
+    /** The head the user reviewed; GitLab refuses with 409 if the branch moved since. Null is omitted. */
+    @Field("sha") sha: String? = null,
   ): Response<GitLabMergeRequest>
 
   @GET("api/v4/projects/{id}/merge_requests/{mr_iid}/diffs")

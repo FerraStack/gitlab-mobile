@@ -5,6 +5,7 @@ import com.cboyxd.gitlab.data.api.GitLabApiException
 import com.cboyxd.gitlab.data.api.normalizeBaseUrl
 import com.cboyxd.gitlab.data.auth.GitLabAuth
 import com.cboyxd.gitlab.data.model.GitLabInstance
+import com.cboyxd.gitlab.data.model.GitLabMergeRequest
 import com.cboyxd.gitlab.data.repository.GitLabRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -251,5 +252,30 @@ class GitLabRepositoryTest {
   fun `personal access tokens from current gitlab are recognised`() {
     assertEquals("glpat-new", GitLabAuth.createdAccessToken("""{"new_token":"glpat-new","active_access_tokens":[]}"""))
     assertEquals("glpat-old", GitLabAuth.createdAccessToken("""{"token":"glpat-old"}"""))
+  }
+
+  @Test
+  fun `merging pins the commit the user reviewed`() = runBlocking {
+    server.enqueue(MockResponse().setBody("""{"id":1,"iid":12,"project_id":1,"title":"Fix launch","state":"merged","sha":"abc123"}""").addHeader("Content-Type", "application/json"))
+    val mr = GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "Fix launch", sha = "abc123")
+    assertEquals("merged", repository.mergeMergeRequest(instance, mr).getOrThrow().state)
+    val request = server.takeRequest()
+    assertEquals("PUT", request.method)
+    assertEquals("/api/v4/projects/1/merge_requests/12/merge", request.path)
+    assertTrue(request.body.readUtf8().contains("sha=abc123"))
+  }
+
+  @Test
+  fun `a branch that moved after the review is refused, not merged`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(409).setBody("""{"message":"SHA does not match HEAD of source branch"}"""))
+    val error = repository.mergeMergeRequest(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "Fix launch", sha = "old")).exceptionOrNull()
+    assertTrue(error is GitLabApiException && error.code == 409 && error.message!!.contains("source branch changed"))
+  }
+
+  @Test
+  fun `merge requests without a known head merge without a sha`() = runBlocking {
+    server.enqueue(MockResponse().setBody("""{"id":1,"iid":12,"project_id":1,"title":"Fix launch","state":"merged"}""").addHeader("Content-Type", "application/json"))
+    repository.mergeMergeRequest(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "Fix launch")).getOrThrow()
+    assertTrue(!server.takeRequest().body.readUtf8().contains("sha="))
   }
 }
