@@ -45,7 +45,7 @@ class JobActionsTest {
         state = PipelineDetailState(
           projectId = 1,
           pipelineId = 900,
-          pipeline = Loadable(GitLabPipeline(id = 900, projectId = 1, status = "running", ref = "main", sha = "abc1234def", createdAt = "2026-11-08T06:00:00Z"), loaded = true),
+          pipeline = Loadable(GitLabPipeline(id = 900, projectId = 1, status = "running", ref = "main", sha = "abc1234def", createdAt = "12 min ago"), loaded = true),
           jobs = Loadable(jobs, loaded = true),
         ),
         canWrite = canWrite,
