@@ -1,6 +1,12 @@
 package com.cboyxd.gitlab
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
+import com.cboyxd.gitlab.ui.theme.Gl
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -26,7 +32,10 @@ class StorageErrorStateTest {
 
   private fun show(dark: Boolean, onReset: () -> Unit = {}) = rule.setContent {
     GitLabTheme(darkTheme = dark, reducedMotion = true) {
-      StorageErrorState(message = "Unable to read saved credentials.", onRetry = {}, onReset = onReset)
+      // As in the app: full screen, centered, on the page background.
+      Box(Modifier.fillMaxSize().background(Gl.colors.bg), contentAlignment = Alignment.Center) {
+        StorageErrorState(message = "Unable to read saved credentials.", onRetry = {}, onReset = onReset)
+      }
     }
   }
 
