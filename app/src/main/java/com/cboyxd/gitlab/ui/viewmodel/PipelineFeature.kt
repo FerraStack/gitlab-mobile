@@ -1,5 +1,6 @@
 package com.cboyxd.gitlab.ui.viewmodel
 
+import com.cboyxd.gitlab.data.api.GitLabApiException
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.repository.JobTrace
@@ -9,9 +10,29 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.min
 
 private val ACTIVE = setOf("running", "pending", "created", "preparing", "waiting_for_resource", "scheduled", "canceling")
 private const val POLL_MS = 8_000L
+
+/** When a running pipeline or job refreshes next. */
+internal object LivePolling {
+  const val INTERVAL = POLL_MS
+  const val MAX_BACKOFF = 60_000L
+
+  /**
+   * Delay before the next refresh, or null to stop. A finished pipeline or job stops; a failed
+   * request (offline, timeout, 5xx, 429) keeps the last known state and retries with backoff as
+   * long as that state was still running. Client errors such as 401 or 404 won't fix themselves.
+   * [failures] counts consecutive failed refreshes, including this one.
+   */
+  fun next(status: Result<String?>, lastKnownStatus: String?, failures: Int): Long? {
+    val error = status.exceptionOrNull() ?: return if (status.getOrNull() in ACTIVE) INTERVAL else null
+    if (error is GitLabApiException && error.code in 400..499 && error.code != 408 && error.code != 429) return null
+    if (lastKnownStatus !in ACTIVE) return null
+    return min(INTERVAL shl min(failures, 4), MAX_BACKOFF)
+  }
+}
 
 /** Pipeline detail with its jobs, and job detail with the log. Active ones refresh while open. */
 class PipelineFeature internal constructor(private val host: SessionHost) {
@@ -47,7 +68,10 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         )
       )
     }
+    val knownPipelineStatus = host.state.value.pipelineDetail.pipeline.data?.status
     pipelineJob = host.session.launch {
+      var lastKnown = knownPipelineStatus
+      var failures = 0
       while (true) {
         val (pipeline, jobs) = coroutineScope {
           val summary = async { host.api { host.repository.getPipeline(it, projectId, pipelineId) } }
@@ -61,8 +85,9 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
             jobs = s.pipelineDetail.jobs.settle(jobs),
           ))
         }
-        if (pipeline.getOrNull()?.status !in ACTIVE) break
-        delay(POLL_MS)
+        pipeline.getOrNull()?.let { lastKnown = it.status }
+        failures = if (pipeline.isFailure) failures + 1 else 0
+        delay(LivePolling.next(pipeline.map { it.status }, lastKnown, failures) ?: break)
       }
     }
   }
@@ -81,7 +106,10 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
       val known = previous?.job?.data ?: s.pipelineDetail.jobs.data.firstOrNull { it.id == jobId }
       s.copy(jobDetail = JobDetailState(projectId, jobId, Loadable<GitLabJob?>(known, loaded = known != null).start(), (previous?.trace ?: Loadable<JobTrace?>(null)).start()))
     }
+    val knownJobStatus = host.state.value.jobDetail.job.data?.status
     jobJob = host.session.launch {
+      var lastKnown = knownJobStatus
+      var failures = 0
       while (true) {
         val (job, trace) = coroutineScope {
           val summary = async { host.api { host.repository.getJob(it, projectId, jobId) } }
@@ -95,8 +123,9 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
             trace = s.jobDetail.trace.settle(trace.map { it as JobTrace? }),
           ))
         }
-        if (job.getOrNull()?.status !in ACTIVE) break
-        delay(POLL_MS)
+        job.getOrNull()?.let { lastKnown = it.status }
+        failures = if (job.isFailure) failures + 1 else 0
+        delay(LivePolling.next(job.map { it.status }, lastKnown, failures) ?: break)
       }
     }
   }
