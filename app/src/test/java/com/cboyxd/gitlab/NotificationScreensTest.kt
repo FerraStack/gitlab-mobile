@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import com.cboyxd.gitlab.notifications.AccountPoll
+import com.cboyxd.gitlab.notifications.BatteryHelp
 import com.cboyxd.gitlab.notifications.ChannelState
 import com.cboyxd.gitlab.notifications.DataSaver
 import com.cboyxd.gitlab.notifications.NotificationDiagnostics
@@ -101,7 +102,12 @@ class NotificationScreensTest {
   )
 
   @Composable
-  private fun SettingsScreen(instant: Boolean = false, onSetInstant: (Boolean) -> Unit = {}) = NotificationSettingsScreen(
+  private fun SettingsScreen(
+    instant: Boolean = false,
+    batteryCard: Boolean = false,
+    onSetInstant: (Boolean) -> Unit = {},
+    onAllow: () -> Unit = {},
+  ) = NotificationSettingsScreen(
     diagnostics = latePhone(),
     onBack = {},
     onOpenSystemSettings = {},
@@ -109,6 +115,9 @@ class NotificationScreensTest {
     instantEnabled = instant,
     intervalSeconds = 90,
     onSetInstant = onSetInstant,
+    battery = BatteryHelp.forManufacturer("Xiaomi"),
+    showBatteryCard = batteryCard,
+    onAllowBackground = onAllow,
   )
 
   @Test fun diagnostics_light() = capture("notification_diagnostics", dark = false) { Diagnostics() }
@@ -117,6 +126,19 @@ class NotificationScreensTest {
   @Test fun settings_dark() = capture("notification_settings", dark = true) { SettingsScreen() }
   @Test fun settings_instant_light() = capture("notification_settings_instant", dark = false) { SettingsScreen(instant = true) }
   @Test fun settings_instant_dark() = capture("notification_settings_instant", dark = true) { SettingsScreen(instant = true) }
+  @Test fun battery_card_light() = capture("notification_battery_card", dark = false) { SettingsScreen(instant = true, batteryCard = true) }
+  @Test fun battery_card_dark() = capture("notification_battery_card", dark = true) { SettingsScreen(instant = true, batteryCard = true) }
+
+  @Test
+  fun `the battery card asks to allow background use`() {
+    var allowed = 0
+    rule.setContent {
+      GitLabTheme(darkTheme = true, reducedMotion = true) { SettingsScreen(instant = true, batteryCard = true, onAllow = { allowed++ }) }
+    }
+    rule.onNodeWithText("Keep instant notifications running").assertExists()
+    rule.onNodeWithTag("battery_allow").performClick()
+    assertEquals(1, allowed)
+  }
 
   @Test
   fun `the instant switch reports the new value`() {
