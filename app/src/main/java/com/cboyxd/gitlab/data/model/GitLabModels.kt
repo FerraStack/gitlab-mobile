@@ -243,6 +243,8 @@ data class GitLabMergeRequest(
   @Json(name = "force_remove_source_branch") val forceRemoveSourceBranch: Boolean? = null,
   /** Set to auto-merge: merges when the pipeline succeeds. */
   @Json(name = "merge_when_pipeline_succeeds") val mergeWhenPipelineSucceeds: Boolean? = null,
+  /** The revisions the current changes compare; diff comments are anchored to them. Single-MR endpoint only. */
+  @Json(name = "diff_refs") val diffRefs: GitLabDiffRefs? = null,
 ) {
   val isDraft: Boolean get() = draft || workInProgress
 }
@@ -554,6 +556,38 @@ val GitLabDiscussion.resolvable: Boolean get() = notes.any { it.resolvable }
 
 /** Resolved when every resolvable note is. */
 val GitLabDiscussion.resolved: Boolean get() = resolvable && notes.filter { it.resolvable }.all { it.resolved == true }
+
+@JsonClass(generateAdapter = true)
+data class GitLabDiffRefs(
+  @Json(name = "base_sha") val baseSha: String = "",
+  @Json(name = "start_sha") val startSha: String = "",
+  @Json(name = "head_sha") val headSha: String = "",
+)
+
+/** Where a new diff comment goes: one line of one changed file in the current version. */
+data class DiffLineAnchor(
+  val oldPath: String,
+  val newPath: String,
+  /** Set for removed and unchanged lines. */
+  val oldLine: Int?,
+  /** Set for added and unchanged lines. */
+  val newLine: Int?,
+)
+
+/**
+ * The `position[...]` fields GitLab wants for a comment on [anchor]: added lines name only the new
+ * line, removed lines only the old one, unchanged lines both.
+ */
+fun diffNotePosition(refs: GitLabDiffRefs, anchor: DiffLineAnchor): Map<String, String> = buildMap {
+  put("position[position_type]", "text")
+  put("position[base_sha]", refs.baseSha)
+  put("position[start_sha]", refs.startSha)
+  put("position[head_sha]", refs.headSha)
+  put("position[old_path]", anchor.oldPath)
+  put("position[new_path]", anchor.newPath)
+  anchor.oldLine?.let { put("position[old_line]", it.toString()) }
+  anchor.newLine?.let { put("position[new_line]", it.toString()) }
+}
 
 @JsonClass(generateAdapter = true)
 data class GitLabDiffPosition(

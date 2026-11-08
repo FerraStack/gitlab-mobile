@@ -26,6 +26,7 @@ import com.squareup.moshi.JsonClass
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Field
+import retrofit2.http.FieldMap
 import retrofit2.http.FormUrlEncoded
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -55,6 +56,16 @@ interface GitLabApiService {
     @Query("per_page") perPage: Int = 100,
     @Query("page") page: Int = 1,
   ): Response<List<com.cboyxd.gitlab.data.model.GitLabDiscussion>>
+
+  /** Starts a thread; with `position[...]` fields it is a comment on a diff line. */
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/discussions")
+  suspend fun createMergeRequestDiscussion(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Field("body") body: String,
+    @FieldMap position: Map<String, String>,
+  ): Response<com.cboyxd.gitlab.data.model.GitLabDiscussion>
 
   /** Adds a reply to a thread (or turns a single comment into one). */
   @FormUrlEncoded

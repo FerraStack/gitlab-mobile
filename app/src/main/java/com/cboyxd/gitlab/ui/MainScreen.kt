@@ -600,6 +600,7 @@ private fun Destination(
       onLink = onLink,
       onRetry = viewModel.review::retry,
       onMerge = viewModel.review::merge,
+      onCommentOnLine = viewModel.review::commentOnLine,
       onSetClosed = viewModel.review::setClosed,
       onComment = viewModel.review::postNote,
       onOpenPipeline = { viewModel.ci.openPipeline(it.projectId.takeIf { id -> id > 0 } ?: uiState.mergeRequestDetail.projectId, it.id) },
