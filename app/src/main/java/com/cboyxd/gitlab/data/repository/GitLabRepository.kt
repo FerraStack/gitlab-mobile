@@ -767,6 +767,24 @@ class GitLabRepository {
     service(instance).retryJob(projectId, jobId).requireBody()
   }
 
+  /** Runs a manual job. Protected environments and branches can refuse (403). */
+  suspend fun playJob(instance: GitLabInstance, projectId: Long, jobId: Long): Result<GitLabJob> = call {
+    requireToken(instance)
+    val response = service(instance).playJob(projectId, jobId)
+    when (response.code()) {
+      403 -> throw GitLabApiException(403, "You can't run this job. It may deploy to a protected environment or branch.")
+      400 -> throw GitLabApiException(400, "This job can't be started now. It may already have run.")
+    }
+    response.requireBody()
+  }
+
+  suspend fun cancelJob(instance: GitLabInstance, projectId: Long, jobId: Long): Result<GitLabJob> = call {
+    requireToken(instance)
+    val response = service(instance).cancelJob(projectId, jobId)
+    if (response.code() == 403) throw GitLabApiException(403, "You can't cancel this job.")
+    response.requireBody()
+  }
+
   /**
    * The end of a job log. Logs can be hundreds of megabytes, so only the last [MAX_TRACE_BYTES]
    * are requested (Range) or, when the server sends everything, kept while streaming.

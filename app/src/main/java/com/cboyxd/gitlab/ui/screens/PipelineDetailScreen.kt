@@ -37,6 +37,8 @@ import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.KeyboardDoubleArrowDown
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -55,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -112,6 +115,7 @@ fun PipelineDetailScreen(
   onOpenCommit: (String) -> Unit,
   onOpenInBrowser: (String) -> Unit,
   modifier: Modifier = Modifier,
+  onPlayJob: (GitLabJob) -> Unit = {},
 ) {
   val pipeline = state.pipeline.data
   var confirmCancel by rememberSaveable { mutableStateOf(false) }
@@ -186,7 +190,12 @@ fun PipelineDetailScreen(
                 Column(Modifier.background(Gl.colors.bg)) {
                   jobs.forEachIndexed { index, job ->
                     if (index > 0) GlDivider(inset = 52.dp)
-                    JobRow(job = job, onClick = { onOpenJob(job) })
+                    JobRow(
+                      job = job,
+                      onClick = { onOpenJob(job) },
+                      onPlay = if (canWrite && job.status == "manual") ({ onPlayJob(job) }) else null,
+                      busy = state.busy,
+                    )
                   }
                 }
               }
@@ -308,7 +317,7 @@ private fun StageHeader(stage: String, jobs: List<GitLabJob>) {
 }
 
 @Composable
-private fun JobRow(job: GitLabJob, onClick: () -> Unit) {
+private fun JobRow(job: GitLabJob, onClick: () -> Unit, onPlay: (() -> Unit)? = null, busy: Boolean = false) {
   val style = pipelineStatusStyle(job.status)
   Row(
     modifier = Modifier
@@ -334,7 +343,17 @@ private fun JobRow(job: GitLabJob, onClick: () -> Unit) {
         }
       }
     }
-    Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = Gl.colors.textTertiary)
+    if (onPlay != null) {
+      GlIconAction(
+        icon = Icons.Outlined.PlayArrow,
+        contentDescription = "Run ${job.name}",
+        onClick = onPlay,
+        enabled = !busy,
+        modifier = Modifier.testTag("play_${job.id}"),
+      )
+    } else {
+      Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = Gl.colors.textTertiary)
+    }
   }
 }
 
@@ -386,6 +405,8 @@ fun JobDetailScreen(
   onRetryJob: () -> Unit,
   onOpenInBrowser: (String) -> Unit,
   modifier: Modifier = Modifier,
+  onPlayJob: () -> Unit = {},
+  onCancelJob: () -> Unit = {},
 ) {
   val job = state.job.data
   val c = Gl.colors
@@ -437,9 +458,34 @@ fun JobDetailScreen(
             Spacer(Modifier.height(GlSpace.tight))
             InlineError(message = humanFailure(job.failureReason))
           }
-          if (canWrite && job.status in setOf("failed", "canceled", "success")) {
-            Spacer(Modifier.height(GlSpace.tight))
-            GlButton(text = "Retry job", onClick = onRetryJob, kind = GlButtonKind.Secondary, loading = state.busy, icon = Icons.Outlined.Refresh)
+          if (canWrite) {
+            when (job.status) {
+              "failed", "canceled", "success" -> {
+                Spacer(Modifier.height(GlSpace.tight))
+                GlButton(text = "Retry job", onClick = onRetryJob, kind = GlButtonKind.Secondary, loading = state.busy, icon = Icons.Outlined.Refresh)
+              }
+              "manual" -> {
+                Spacer(Modifier.height(GlSpace.tight))
+                GlButton(
+                  text = "Run job",
+                  onClick = onPlayJob,
+                  loading = state.busy,
+                  icon = Icons.Outlined.PlayArrow,
+                  modifier = Modifier.testTag("run_job"),
+                )
+              }
+              in JOB_ACTIVE -> {
+                Spacer(Modifier.height(GlSpace.tight))
+                GlButton(
+                  text = "Cancel job",
+                  onClick = onCancelJob,
+                  kind = GlButtonKind.Danger,
+                  loading = state.busy,
+                  icon = Icons.Outlined.Close,
+                  modifier = Modifier.testTag("cancel_job"),
+                )
+              }
+            }
           }
         }
         GlDivider()
@@ -578,3 +624,6 @@ private fun humanFailure(reason: String): String = when (reason) {
   "job_execution_timeout" -> "The job ran longer than its timeout."
   else -> reason.replace('_', ' ').replaceFirstChar { it.uppercase() }
 }
+
+/** Job states GitLab can cancel. */
+private val JOB_ACTIVE = setOf("running", "pending", "created", "preparing", "waiting_for_resource", "scheduled")

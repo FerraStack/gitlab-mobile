@@ -135,6 +135,59 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
     if (d.projectId > 0) loadJob(d.projectId, d.jobId)
   }
 
+  /** Runs a manual job, from the pipeline's job list or the job page, then follows it. */
+  fun playJob(projectId: Long, jobId: Long) {
+    if (host.state.value.jobDetail.busy || host.state.value.pipelineDetail.busy) return
+    setBusy(true)
+    host.session.launch {
+      host.api { host.repository.playJob(it, projectId, jobId) }.fold(
+        onSuccess = { started ->
+          setBusy(false)
+          host.notify("Started ${started.name.ifBlank { "job #${started.id}" }}")
+          refreshAfterAction(projectId, started.id)
+        },
+        onFailure = { error ->
+          setBusy(false)
+          host.notifyError(error.userMessage())
+        },
+      )
+    }
+  }
+
+  /** Cancels the running job on the job page. */
+  fun cancelJob() {
+    val d = host.state.value.jobDetail
+    val job = d.job.data ?: return
+    if (d.busy) return
+    setBusy(true)
+    host.session.launch {
+      host.api { host.repository.cancelJob(it, d.projectId, job.id) }.fold(
+        onSuccess = { canceled ->
+          setBusy(false)
+          host.notify("Canceled ${canceled.name.ifBlank { "job #${canceled.id}" }}")
+          refreshAfterAction(d.projectId, canceled.id)
+        },
+        onFailure = { error ->
+          setBusy(false)
+          host.notifyError(error.userMessage())
+        },
+      )
+    }
+  }
+
+  private fun setBusy(busy: Boolean) = host.state.update {
+    it.copy(jobDetail = it.jobDetail.copy(busy = busy), pipelineDetail = it.pipelineDetail.copy(busy = busy))
+  }
+
+  /** Reloads whichever of the pipeline and job pages show [jobId], so live refresh resumes. */
+  private fun refreshAfterAction(projectId: Long, jobId: Long) {
+    val s = host.state.value
+    if (s.jobDetail.jobId == jobId && s.jobDetail.projectId == projectId) loadJob(projectId, jobId)
+    if (s.pipelineDetail.projectId == projectId && s.pipelineDetail.jobs.data.any { it.id == jobId }) {
+      loadPipeline(projectId, s.pipelineDetail.pipelineId)
+    }
+  }
+
   fun retryJob() {
     val d = host.state.value.jobDetail
     val job = d.job.data ?: return

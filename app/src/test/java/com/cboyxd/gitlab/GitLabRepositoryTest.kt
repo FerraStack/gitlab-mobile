@@ -450,4 +450,23 @@ class GitLabRepositoryTest {
     assertEquals(false, mr.mergeWhenPipelineSucceeds)
     assertEquals("/api/v4/projects/1/merge_requests/12/cancel_merge_when_pipeline_succeeds", server.takeRequest().path)
   }
+
+  @Test
+  fun `manual jobs are played and running jobs canceled`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":41,"name":"deploy","status":"pending"}"""))
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":42,"name":"test","status":"canceled"}"""))
+
+    assertEquals("pending", repository.playJob(instance, 1, 41).getOrThrow().status)
+    assertEquals("canceled", repository.cancelJob(instance, 1, 42).getOrThrow().status)
+
+    assertEquals("/api/v4/projects/1/jobs/41/play", server.takeRequest().path)
+    assertEquals("/api/v4/projects/1/jobs/42/cancel", server.takeRequest().path)
+  }
+
+  @Test
+  fun `a protected manual job explains why it can't run`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(403).setBody("""{"message":"403 Forbidden"}"""))
+    val error = repository.playJob(instance, 1, 41).exceptionOrNull()
+    assertTrue(error is GitLabApiException && error.message!!.contains("protected environment"))
+  }
 }
