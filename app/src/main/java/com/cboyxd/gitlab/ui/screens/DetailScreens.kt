@@ -783,7 +783,13 @@ private fun StatusRows(
         // Never say "Ready to merge" from list data: wait for the fresh merge request (its
         // detailed_merge_status and head pipeline) and the approvals before offering to merge.
         val checking = mergeStatusPending(state)
-        val (headline, detail, tone) = if (checking) Triple("Checking merge status…", null, Tone.Neutral) else mergeReadiness(mr)
+        // GitLab's merge status can lag behind approvals; required approvals always block.
+        val approvalsMissing = (state.approvals.data?.approvalsLeft ?: 0) > 0
+        val (headline, detail, tone) = when {
+          checking -> Triple("Checking merge status…", null, Tone.Neutral)
+          approvalsMissing -> Triple("Approval required", "This merge request needs approval before merging.", Tone.Warning)
+          else -> mergeReadiness(mr)
+        }
         val (fg, _) = toneColors(tone)
         DetailRow(
           icon = when (tone) {
@@ -805,7 +811,7 @@ private fun StatusRows(
           }
           Column(Modifier.fillMaxWidth().background(c.bg).padding(start = GlSpace.margin, end = GlSpace.margin, bottom = GlSpace.margin)) {
             MergeSplitButton(
-              enabled = !checking && blockedReason == null && !state.busy,
+              enabled = !checking && !approvalsMissing && blockedReason == null && !state.busy,
               loading = state.busy,
               onMerge = onRequestMerge,
               onClose = { onSetClosed(true) },

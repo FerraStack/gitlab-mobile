@@ -135,4 +135,19 @@ class MergeRequestOpeningTest {
     rule.onNodeWithText("Ready to merge").assertExists()
     mergeButton().assertIsEnabled()
   }
+
+  @Test
+  fun `required approvals block merging even when the merge status lags`() {
+    val lagging = loading().let {
+      it.copy(
+        mergeRequest = it.mergeRequest.success(Fakes.mergeRequests.first()), // detailed_merge_status "mergeable"
+        approvals = it.approvals.success(GitLabApprovals(approvalsRequired = 1, approvalsLeft = 1)),
+      )
+    }
+    show(dark = true, state = lagging)
+    scrollToMerge()
+    rule.onNodeWithText("Approval required").assertExists()
+    rule.onNodeWithText("Ready to merge").assertDoesNotExist()
+    mergeButton().assertIsNotEnabled()
+  }
 }
