@@ -9,6 +9,7 @@ import com.cboyxd.gitlab.data.api.GitLabApiClient
 import com.cboyxd.gitlab.data.api.GitLabApiException
 import com.cboyxd.gitlab.data.api.formatGitLabTime
 import com.cboyxd.gitlab.data.auth.GitLabAuth
+import com.cboyxd.gitlab.data.auth.GitLabAuthException
 import com.cboyxd.gitlab.data.auth.GitLabSessionTokens
 import com.cboyxd.gitlab.data.auth.GitLabOAuth
 import com.cboyxd.gitlab.data.auth.GitLabPasswordLogin
@@ -732,8 +733,20 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       GitLabSessionTokens.fresh(store, current.id, forceRefresh, staleToken) ?: return null
     } catch (cancel: CancellationException) {
       throw cancel
-    } catch (_: Exception) {
-      _uiState.update { if (it.activeInstance?.id == current.id) it.copy(sessionExpired = true) else it }
+    } catch (error: Exception) {
+      // Only GitLab refusing the refresh means signing in again; no network just means "later".
+      if (error is GitLabAuthException && error.rejected) {
+        val dropped = runStorage { store.getInstances().firstOrNull { it.id == current.id } }.getOrNull() ?: current
+        _uiState.update { state ->
+          if (state.activeInstance?.id != current.id) state
+          else state.copy(
+            sessionExpired = true,
+            activeInstance = dropped,
+            savedInstances = state.savedInstances.map { if (it.id == dropped.id) dropped else it },
+          )
+        }
+        return dropped
+      }
       return current
     }
     _uiState.update { state ->
@@ -757,9 +770,13 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       } else result
     }
     val error = first.exceptionOrNull()
-    if (error.isUnauthorized() && instance.authKind == GitLabAuth.KIND_OAUTH && instance.refreshToken.isNotBlank()) {
-      val retried = freshInstance(forceRefresh = true, staleToken = instance.token)
+    if (error.isUnauthorized() && instance.authKind == GitLabAuth.KIND_OAUTH && instance.token.isNotBlank()) {
+      val retried = if (instance.refreshToken.isNotBlank()) freshInstance(forceRefresh = true, staleToken = instance.token) else null
       if (retried != null && retried.token != instance.token) return block(retried)
+      // A 401 with no refresh token left (GitLab rejected it earlier): only signing in helps.
+      if ((retried ?: instance).refreshToken.isBlank()) {
+        _uiState.update { if (it.activeInstance?.id == instance.id) it.copy(sessionExpired = true) else it }
+      }
     }
     return first
   }

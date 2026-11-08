@@ -102,7 +102,11 @@ object GitLabOAuth {
       http.newCall(request).execute().use { response ->
         val raw = response.body?.string().orEmpty()
         if (!response.isSuccessful) {
-          throw GitLabAuthException(GitLabAuth.accessError(raw) ?: "GitLab sign-in failed (${response.code}).")
+          // RFC 6749 answers invalid_grant / invalid_client with 400 or 401; 5xx is the server's problem.
+          throw GitLabAuthException(
+            GitLabAuth.accessError(raw) ?: "GitLab sign-in failed (${response.code}).",
+            rejected = response.code == 400 || response.code == 401,
+          )
         }
         return GitLabAuth.parseOAuthTokens(raw)
       }
@@ -111,7 +115,8 @@ object GitLabOAuth {
     }
   }
 
-  private fun tokenClient(): OkHttpClient = OkHttpClient.Builder()
+  // Tests reach MockWebServer through the API client's override (it trusts the test certificate).
+  private fun tokenClient(): OkHttpClient = (com.cboyxd.gitlab.data.api.GitLabApiClient.clientOverride?.newBuilder() ?: OkHttpClient.Builder())
     .connectTimeout(20, TimeUnit.SECONDS)
     .readTimeout(30, TimeUnit.SECONDS)
     .writeTimeout(30, TimeUnit.SECONDS)
