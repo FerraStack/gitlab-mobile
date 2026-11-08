@@ -686,10 +686,20 @@ class GitLabRepository {
     service(instance).retryJob(projectId, jobId).requireBody()
   }
 
-  /** The end of a job log. Logs can be many megabytes; only the last [MAX_TRACE_BYTES] are kept. */
+  /**
+   * The end of a job log. Logs can be hundreds of megabytes, so only the last [MAX_TRACE_BYTES]
+   * are requested (Range) or, when the server sends everything, kept while streaming.
+   */
   suspend fun getJobTrace(instance: GitLabInstance, projectId: Long, jobId: Long): Result<JobTrace> = call {
-    val response = service(instance).getJobTrace(projectId, jobId)
+    val response = service(instance).getJobTrace(projectId, jobId, range = "bytes=-$MAX_TRACE_BYTES")
+    // 416: the log is empty, so no suffix range can be satisfied.
+    if (response.code() == 416) {
+      response.errorBody()?.close()
+      return@call JobTrace("", truncated = false)
+    }
     if (!response.isSuccessful) throw response.toGitLabException()
+    // A 206 that doesn't start at byte 0 is a tail of a longer log.
+    val startsMidway = response.code() == 206 && (contentRangeStart(response.headers()["Content-Range"]) ?: 0L) > 0
     val body = response.body() ?: return@call JobTrace("", truncated = false)
     body.use {
       val source = it.source()
@@ -705,7 +715,14 @@ class GitLabRepository {
         buffer.skip(buffer.size - MAX_TRACE_BYTES)
         dropped = true
       }
-      JobTrace(buffer.readUtf8(), truncated = dropped)
+      val truncated = dropped || startsMidway
+      // A cut tail starts mid-line, possibly inside a UTF-8 character or an ANSI escape: start
+      // at the next full line instead.
+      if (truncated) {
+        val newline = buffer.indexOf('\n'.code.toByte(), 0, minOf(buffer.size, 64 * 1024L))
+        if (newline >= 0) buffer.skip(newline + 1)
+      }
+      JobTrace(buffer.readUtf8(), truncated = truncated)
     }
   }
 
@@ -904,6 +921,10 @@ class GitLabRepository {
     const val MAX_TRACE_BYTES = 256_000L
   }
 }
+
+/** The first byte of a `Content-Range: bytes 1000-1999/2000` header, or null. */
+internal fun contentRangeStart(header: String?): Long? =
+  header?.trim()?.removePrefix("bytes")?.trim()?.substringBefore('-')?.toLongOrNull()
 
 internal fun Throwable.toApiException(): Throwable = when (this) {
   is GitLabApiException -> this

@@ -7,6 +7,7 @@ import com.cboyxd.gitlab.data.auth.GitLabAuth
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
 import com.cboyxd.gitlab.data.repository.GitLabRepository
+import com.cboyxd.gitlab.data.repository.contentRangeStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -200,6 +201,49 @@ class GitLabRepositoryTest {
     assertTrue(trace.truncated)
     assertTrue(trace.text.endsWith("END"))
     assertTrue(trace.text.length <= 256_000)
+    assertEquals("bytes=-256000", server.takeRequest().getHeader("Range"))
+  }
+
+  @Test
+  fun `a ranged job log tail starts at a whole line`() = runBlocking {
+    server.enqueue(
+      MockResponse().setResponseCode(206)
+        .addHeader("Content-Range", "bytes 744000-744022/744023")
+        .setBody("ial line\nstep 2\nEND\n"),
+    )
+
+    val trace = repository.getJobTrace(instance, 1, 2).getOrThrow()
+
+    assertTrue(trace.truncated)
+    assertEquals("step 2\nEND\n", trace.text)
+  }
+
+  @Test
+  fun `a short log answered with its full range is complete`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(206).addHeader("Content-Range", "bytes 0-11/12").setBody("step 1\nEND\n"))
+
+    val trace = repository.getJobTrace(instance, 1, 2).getOrThrow()
+
+    assertTrue(!trace.truncated)
+    assertEquals("step 1\nEND\n", trace.text)
+  }
+
+  @Test
+  fun `an empty log that can't satisfy the range is just empty`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(416))
+
+    val trace = repository.getJobTrace(instance, 1, 2).getOrThrow()
+
+    assertEquals("", trace.text)
+    assertTrue(!trace.truncated)
+  }
+
+  @Test
+  fun `content-range starts are parsed`() {
+    assertEquals(744000L, contentRangeStart("bytes 744000-744022/744023"))
+    assertEquals(0L, contentRangeStart("bytes 0-11/12"))
+    assertEquals(null, contentRangeStart(null))
+    assertEquals(null, contentRangeStart("garbage"))
   }
 
   @Test
