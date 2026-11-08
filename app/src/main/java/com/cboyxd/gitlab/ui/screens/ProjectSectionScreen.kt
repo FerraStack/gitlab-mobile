@@ -119,9 +119,7 @@ fun ProjectSectionScreen(
   onSetIssueState: (String) -> Unit = {},
   onSetMergeRequestState: (String) -> Unit = {},
   onLoadMore: (ProjectSection) -> Unit = {},
-  onRunPipeline: (ref: String, onResult: (String?) -> Unit) -> Unit = { _, _ -> },
 ) {
-  var runningPipeline by rememberSaveable { mutableStateOf(false) }
   val retry = { onRetry(section) }
   var creating by rememberSaveable(state.projectId) { mutableStateOf(false) }
   if (creating && state.project.data != null) {
@@ -141,7 +139,7 @@ fun ProjectSectionScreen(
         com.cboyxd.gitlab.ui.components.GlIconAction(
           Icons.Outlined.PlayArrow,
           "Run pipeline",
-          onClick = { runningPipeline = true },
+          onClick = { onNavigate(ScreenDestination.RunPipeline(state.projectId)) },
           modifier = Modifier.testTag("run_pipeline"),
         )
       }
@@ -205,15 +203,7 @@ fun ProjectSectionScreen(
           }
         }
       }
-      ProjectSection.PIPELINES -> Column {
-        if (runningPipeline) {
-          RunPipelinePanel(
-            defaultRef = state.effectiveRef.orEmpty(),
-            onRun = onRunPipeline,
-            onDismiss = { runningPipeline = false },
-          )
-        }
-        Feed(
+      ProjectSection.PIPELINES -> Feed(
         feed = state.pipelines,
         visibleEmpty = state.pipelines.data.isEmpty(),
         onRetry = retry,
@@ -227,7 +217,6 @@ fun ProjectSectionScreen(
           )
           GlDivider()
         }
-      }
       }
       ProjectSection.COMMITS -> {
         state.effectiveRef?.let { ref ->
