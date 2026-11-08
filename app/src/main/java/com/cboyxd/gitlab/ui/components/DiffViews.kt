@@ -200,6 +200,27 @@ fun prepareDiffLines(lines: List<DiffLine>, path: String, colors: GlColors): Lis
 // Rendering
 // ---------------------------------------------------------------------------------------------
 
+/** Characters a diff line shows when scrolling sideways; as in the file viewer. */
+const val MAX_DIFF_COLUMNS = 800
+/** Characters a wrapped diff line shows; longer lines (minified code) are cut with "…". */
+const val MAX_DIFF_WRAPPED_CHARS = 5_000
+
+/** [text] cut to what a row can show, with "…" when something was left out. */
+internal fun diffDisplayText(text: AnnotatedString, wrapped: Boolean): AnnotatedString {
+  val limit = if (wrapped) MAX_DIFF_WRAPPED_CHARS else MAX_DIFF_COLUMNS
+  return if (text.length > limit) text.subSequence(0, limit) + AnnotatedString("…") else text
+}
+
+/**
+ * Width of an unwrapped diff row: wide enough for the longest shown line, never narrower than the
+ * screen. Lines are capped at [MAX_DIFF_COLUMNS], so the width stays far below what Compose can
+ * measure (about 262,000 px), which a 10,000-character minified line used to exceed.
+ */
+internal fun diffCodeWidth(longestLine: Int, fontSizeSp: Float, fontScale: Float, gutters: Dp, screenWidth: Dp): Dp {
+  val columns = (longestLine.coerceAtMost(MAX_DIFF_COLUMNS) + 1).coerceAtLeast(1)
+  return (columns * fontSizeSp * 0.65f * fontScale).dp.plus(gutters + 24.dp).coerceAtLeast(screenWidth)
+}
+
 /** Width of the line-number gutter for numbers up to [maxLine]. */
 fun diffGutterWidth(maxLine: Int): Dp = (maxLine.toString().length.coerceAtLeast(2) * 8 + 16).dp
 
@@ -272,7 +293,10 @@ fun DiffLineRow(
       modifier = Modifier.padding(start = 4.dp, top = 3.dp),
     )
     Text(
-      text = if (options.syntaxColors) text ?: AnnotatedString(line.text) else AnnotatedString(line.text),
+      text = diffDisplayText(
+        if (options.syntaxColors) text ?: AnnotatedString(line.text) else AnnotatedString(line.text),
+        wrapped = scrollState == null,
+      ),
       style = Gl.type.mono.copy(fontSize = options.fontSize.sp, lineHeight = (options.fontSize * 1.5).sp, lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)),
       color = c.textPrimary,
       softWrap = scrollState == null,
@@ -402,14 +426,15 @@ fun LazyListScope.diffFileItems(
       else -> {
         val gutter = diffGutterWidth(lines.maxOfOrNull { maxOf(it.oldNo ?: 0, it.newNo ?: 0) } ?: 0)
         val texts = prepared[index]
-        val maxColumns = (lines.maxOfOrNull { it.text.length } ?: 0).coerceAtMost(10_000)
+        val maxColumns = (lines.maxOfOrNull { it.text.length } ?: 0).coerceAtMost(MAX_DIFF_COLUMNS)
         items(lines.size, key = { "file-$index-line-$it" }) { n ->
           val scroll = if (wrapLines) null else LocalDiffScrollStates.current.getOrPut(index) { ScrollState(0) }
           val screenWidth = LocalConfiguration.current.screenWidthDp.dp
           val options = LocalDiffDisplayOptions.current
           val fontScale = LocalDensity.current.fontScale
           val width = remember(lines, screenWidth, gutter, options, fontScale) {
-            (maxColumns * options.fontSize * 0.65f * fontScale).dp.plus(gutter * (if (!options.showLineNumbers) 0 else if (options.dualLineNumbers) 2 else 1) + 24.dp).coerceAtLeast(screenWidth)
+            val gutters = gutter * (if (!options.showLineNumbers) 0 else if (options.dualLineNumbers) 2 else 1)
+            diffCodeWidth(maxColumns, options.fontSize.toFloat(), fontScale, gutters, screenWidth)
           }
           DiffLineRow(lines[n], texts?.getOrNull(n), gutter, scrollState = scroll, codeWidth = width)
         }
