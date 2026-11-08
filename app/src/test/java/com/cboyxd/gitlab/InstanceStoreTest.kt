@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.storage.InstanceStore
+import com.cboyxd.gitlab.data.storage.SecretStoreException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -106,5 +107,24 @@ class InstanceStoreTest {
     val encrypted = context.getSharedPreferences("gitlab_mobile_secrets", Context.MODE_PRIVATE)
       .getString("saved_instances", null)
     assertTrue(encrypted != null && !encrypted.contains("glpat-secret"))
+  }
+
+  @Test
+  fun `accounts encrypted with a key this phone doesn't have can be reset`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    // What a device transfer leaves behind: our ciphertext format, sealed with another key.
+    val foreign = android.util.Base64.encodeToString(
+      byteArrayOf(12) + ByteArray(12) { 7 } + ByteArray(48) { 3 },
+      android.util.Base64.NO_WRAP,
+    )
+    context.getSharedPreferences("gitlab_mobile_secrets", Context.MODE_PRIVATE).edit().putString("saved_instances", foreign).commit()
+
+    val store = InstanceStore(context)
+    assertTrue(runCatching { store.getInstances() }.exceptionOrNull() is SecretStoreException)
+
+    store.resetAll()
+    assertTrue(store.getInstances().isEmpty())
+    store.addInstance(GitLabInstance(name = "Again", url = "https://gitlab.com", token = "glpat-new", username = "dev", isActive = true))
+    assertEquals(listOf("Again"), InstanceStore(context).getInstances().map { it.name })
   }
 }

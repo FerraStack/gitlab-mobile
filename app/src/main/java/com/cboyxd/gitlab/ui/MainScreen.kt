@@ -86,6 +86,7 @@ import com.cboyxd.gitlab.ui.components.GlDivider
 import com.cboyxd.gitlab.ui.components.GlRow
 import com.cboyxd.gitlab.ui.components.GlSectionHeader
 import com.cboyxd.gitlab.ui.screens.FileViewerScreen
+import com.cboyxd.gitlab.ui.screens.StorageErrorState
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.ProjectSection
 import com.cboyxd.gitlab.data.model.GitLabLabel
@@ -237,7 +238,11 @@ fun MainScreen(viewModel: GitLabViewModel, onExit: () -> Unit) {
       when {
         !uiState.bootstrapped -> Unit
         uiState.storageError != null -> FullScreenState {
-          ErrorState(message = uiState.storageError ?: "", onRetry = viewModel::retryBootstrap)
+          StorageErrorState(
+            message = uiState.storageError ?: "",
+            onRetry = viewModel::retryBootstrap,
+            onReset = viewModel::resetSavedAccounts,
+          )
         }
         else -> {
           val reduced = Gl.reducedMotion

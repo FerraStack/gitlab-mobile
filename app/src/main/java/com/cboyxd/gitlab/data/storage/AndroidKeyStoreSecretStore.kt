@@ -59,6 +59,20 @@ class AndroidKeyStoreSecretStore(context: Context, name: String) {
     preferences.edit().clear().commit()
   }
 
+  /**
+   * Forgets every value and the Keystore key. The way out when stored values can't be decrypted
+   * any more, for example after the data reached a new phone without its key.
+   */
+  @Synchronized
+  fun reset() {
+    preferences.edit().clear().commit()
+    if (Build.FINGERPRINT.lowercase().contains("robolectric")) {
+      TEST_KEYS.remove(keyAlias)
+      return
+    }
+    runCatching { KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }.deleteEntry(keyAlias) }
+  }
+
   private fun looksEncrypted(value: String): Boolean {
     val packed = runCatching { Base64.decode(value, Base64.NO_WRAP) }.getOrNull() ?: return false
     val ivSize = packed.firstOrNull()?.toInt()?.and(0xFF) ?: return false
