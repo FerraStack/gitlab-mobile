@@ -113,6 +113,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cboyxd.gitlab.data.model.GitLabCommit
+import com.cboyxd.gitlab.data.model.GitLabDiscussion
+import com.cboyxd.gitlab.data.model.resolvable
+import com.cboyxd.gitlab.data.model.resolved
 import com.cboyxd.gitlab.data.model.GitLabIssue
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
@@ -412,11 +415,14 @@ fun MergeRequestDetailScreen(
   /** The signed-in user, to tell whether they already approved. */
   currentUsername: String? = null,
   onSetApproved: (Boolean) -> Unit = {},
+  onReply: (discussionId: String, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
+  onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
   var confirmMerge by rememberSaveable { mutableStateOf(false) }
   var composing by rememberSaveable { mutableStateOf(false) }
+  var replyingTo by rememberSaveable { mutableStateOf<String?>(null) }
   var showInfo by rememberSaveable { mutableStateOf(false) }
   val context = remember(mr?.webUrl, onLink) {
     MarkdownContext(webBase = mr?.webUrl?.substringBefore("/-/")?.takeIf { it.isNotBlank() }, rawBase = null, onLink = onLink)
@@ -444,6 +450,8 @@ fun MergeRequestDetailScreen(
       modifier = modifier,
       currentUsername = currentUsername,
       onSetApproved = onSetApproved,
+      onReply = { replyingTo = it },
+      onSetResolved = onSetResolved,
     )
     MrPage.FILES -> FilesChangedPage(state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier)
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
@@ -509,6 +517,15 @@ fun MergeRequestDetailScreen(
       onSubmit = onComment,
     )
   }
+  replyingTo?.let { discussionId ->
+    CommentSheet(
+      posting = state.posting,
+      previewContext = context,
+      onDismiss = { replyingTo = null },
+      onSubmit = { body, done -> onReply(discussionId, body, done) },
+      title = "Reply",
+    )
+  }
   if (showInfo && mr != null) {
     InfoSheet(title = "Details", onDismiss = { showInfo = false }) {
       MetaRow("Assignees") { if (mr.assignees.isEmpty()) MetaValue("No one") else PeopleList(mr.assignees, onOpenUser) }
@@ -543,6 +560,8 @@ private fun MergeRequestOverview(
   modifier: Modifier,
   currentUsername: String? = null,
   onSetApproved: (Boolean) -> Unit = {},
+  onReply: (discussionId: String) -> Unit = {},
+  onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
@@ -666,6 +685,15 @@ private fun MergeRequestOverview(
                 Column(Modifier.fillMaxWidth().then(if (visibleNotes.size > 1) Modifier.padding(start = 12.dp).border(width = 1.dp, color = c.border) else Modifier)) {
                   visibleNotes.forEachIndexed { index, note ->
                     if (note.system) SystemEvent(note, labels) else CommentPost(note, isOpener = note.author.id != 0L && note.author.id == mr.author.id, context = context, onOpenUser = onOpenUser, isReply = index > 0)
+                  }
+                  if (discussion.notes.any { !it.system }) {
+                    ThreadActions(
+                      discussion = discussion,
+                      canWrite = canWrite,
+                      resolving = discussion.id in state.resolvingThreads,
+                      onReply = { onReply(discussion.id) },
+                      onSetResolved = { onSetResolved(discussion.id, it) },
+                    )
                   }
                 }
                 RailGap()
@@ -1627,6 +1655,7 @@ private fun CommentSheet(
   previewContext: MarkdownContext,
   onDismiss: () -> Unit,
   onSubmit: (String, (String?) -> Unit) -> Unit,
+  title: String = "Comment",
 ) {
   val c = Gl.colors
   var draft by remember { mutableStateOf(TextFieldValue("")) }
@@ -1646,7 +1675,7 @@ private fun CommentSheet(
         .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-      Text("Comment", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      Text(title, style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
       MarkdownEditor(
         value = draft,
         onValueChange = { draft = it; emptyError = false },
@@ -1660,7 +1689,7 @@ private fun CommentSheet(
       )
       error?.let { InlineError(it) }
       GlButton(
-        text = "Comment",
+        text = title,
         loading = posting,
         modifier = Modifier.fillMaxWidth(),
         onClick = {
@@ -1695,3 +1724,39 @@ private fun fieldColors() = OutlinedTextFieldDefaults.colors(
   errorLabelColor = Gl.colors.danger,
   errorSupportingTextColor = Gl.colors.danger,
 )
+
+/** Under a thread: reply, and resolve or reopen it when GitLab lets threads be resolved. */
+@Composable
+private fun ThreadActions(
+  discussion: GitLabDiscussion,
+  canWrite: Boolean,
+  resolving: Boolean,
+  onReply: () -> Unit,
+  onSetResolved: (Boolean) -> Unit,
+) {
+  val c = Gl.colors
+  val resolved = discussion.resolved
+  if (!canWrite && !resolved) return
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(start = GlSpace.margin, end = GlSpace.margin, bottom = 8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    if (resolved) {
+      GlBadge("Resolved", tone = Tone.Success, icon = Icons.Outlined.CheckCircle)
+      Spacer(Modifier.weight(1f))
+    }
+    if (canWrite) {
+      GlButton("Reply", onClick = onReply, kind = GlButtonKind.Ghost, icon = Icons.Outlined.ChatBubbleOutline, modifier = Modifier.testTag("reply_${discussion.id}"))
+      if (discussion.resolvable) {
+        GlButton(
+          text = if (resolved) "Unresolve" else "Resolve thread",
+          onClick = { onSetResolved(!resolved) },
+          kind = GlButtonKind.Secondary,
+          loading = resolving,
+          modifier = Modifier.testTag("resolve_${discussion.id}"),
+        )
+      }
+    }
+  }
+}

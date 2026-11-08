@@ -56,6 +56,24 @@ interface GitLabApiService {
     @Query("page") page: Int = 1,
   ): Response<List<com.cboyxd.gitlab.data.model.GitLabDiscussion>>
 
+  /** Adds a reply to a thread (or turns a single comment into one). */
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/discussions/{discussion_id}/notes")
+  suspend fun replyToMergeRequestDiscussion(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Path("discussion_id") discussionId: String,
+    @Field("body") body: String,
+  ): Response<GitLabNote>
+
+  @PUT("api/v4/projects/{id}/merge_requests/{mr_iid}/discussions/{discussion_id}")
+  suspend fun resolveMergeRequestDiscussion(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Path("discussion_id") discussionId: String,
+    @Query("resolved") resolved: Boolean,
+  ): Response<com.cboyxd.gitlab.data.model.GitLabDiscussion>
+
   @GET("api/v4/projects/{id}/repository/compare")
   suspend fun compareDiscussionRevision(
     @Path("id") projectId: Long,

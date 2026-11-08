@@ -529,6 +529,12 @@ data class GitLabDiscussion(
   val notes: List<GitLabNote> = emptyList(),
 )
 
+/** Threads that can be resolved have at least one resolvable note. */
+val GitLabDiscussion.resolvable: Boolean get() = notes.any { it.resolvable }
+
+/** Resolved when every resolvable note is. */
+val GitLabDiscussion.resolved: Boolean get() = resolvable && notes.filter { it.resolvable }.all { it.resolved == true }
+
 @JsonClass(generateAdapter = true)
 data class GitLabDiffPosition(
   @Json(name = "base_sha") val baseSha: String = "",

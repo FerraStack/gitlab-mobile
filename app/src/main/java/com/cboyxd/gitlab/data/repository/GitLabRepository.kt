@@ -670,6 +670,19 @@ class GitLabRepository {
       .map { it.withDisplayTimes() }
   }
 
+  suspend fun replyToDiscussion(instance: GitLabInstance, projectId: Long, iid: Long, discussionId: String, body: String): Result<GitLabNote> = call {
+    requireToken(instance)
+    if (body.isBlank()) throw GitLabApiException(400, "Write a reply first.")
+    service(instance).replyToMergeRequestDiscussion(projectId, iid, discussionId, body).requireBody().withDisplayTimes()
+  }
+
+  suspend fun resolveDiscussion(instance: GitLabInstance, projectId: Long, iid: Long, discussionId: String, resolved: Boolean): Result<GitLabDiscussion> = call {
+    requireToken(instance)
+    val response = service(instance).resolveMergeRequestDiscussion(projectId, iid, discussionId, resolved)
+    if (response.code() == 403) throw GitLabApiException(403, "You can't resolve threads in this merge request.")
+    response.requireBody().let { d -> d.copy(notes = d.notes.map { it.withDisplayTimes() }) }
+  }
+
   suspend fun createMergeRequestNote(instance: GitLabInstance, projectId: Long, iid: Long, body: String): Result<GitLabNote> = call {
     requireToken(instance)
     service(instance).createMergeRequestNote(projectId, iid, body).requireBody().withDisplayTimes()

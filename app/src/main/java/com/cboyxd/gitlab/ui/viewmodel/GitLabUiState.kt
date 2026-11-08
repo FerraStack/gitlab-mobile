@@ -250,6 +250,8 @@ data class MergeRequestDetailState(
   val approvals: Loadable<GitLabApprovals?> = Loadable(null),
   val busy: Boolean = false,
   val posting: Boolean = false,
+  /** Threads whose resolve or unresolve request is running. */
+  val resolvingThreads: Set<String> = emptySet(),
 )
 
 data class GitLabUiState(
