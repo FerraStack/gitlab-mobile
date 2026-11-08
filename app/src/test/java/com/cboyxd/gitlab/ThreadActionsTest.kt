@@ -88,7 +88,8 @@ class ThreadActionsTest {
   fun `a resolved thread says so and offers to reopen`() {
     show(resolved = true)
     scrollTo("resolve_t1")
-    rule.onNodeWithText("Resolved").assertExists()
+    assertTrue(rule.onAllNodesWithText("Resolved").fetchSemanticsNodes().isNotEmpty())
+    rule.onNodeWithText("Unresolve").assertExists()
     rule.onNodeWithTag("resolve_t1").performClick()
     assertEquals(listOf("t1" to false), resolves)
   }

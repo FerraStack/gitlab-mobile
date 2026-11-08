@@ -403,12 +403,12 @@ class GitLabRepositoryTest {
 
   @Test
   fun `replies go to their thread`() = runBlocking {
-    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":9,"body":"Done, thanks"}"""))
-    val note = repository.replyToDiscussion(instance, 1, 12, "abc123", "Done, thanks").getOrThrow()
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":9,"body":"Done"}"""))
+    val note = repository.replyToDiscussion(instance, 1, 12, "abc123", "Done").getOrThrow()
     assertEquals(9L, note.id)
     val request = server.takeRequest()
     assertEquals("/api/v4/projects/1/merge_requests/12/discussions/abc123/notes", request.path)
-    assertTrue(request.body.readUtf8().contains("body=Done%2C+thanks"))
+    assertEquals("body=Done", request.body.readUtf8())
   }
 
   @Test

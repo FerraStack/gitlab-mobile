@@ -1725,7 +1725,10 @@ private fun fieldColors() = OutlinedTextFieldDefaults.colors(
   errorSupportingTextColor = Gl.colors.danger,
 )
 
-/** Under a thread: reply, and resolve or reopen it when GitLab lets threads be resolved. */
+/**
+ * Under a thread: reply, and resolve or reopen it when GitLab lets threads be resolved. Resolved
+ * notes already carry their own "Resolved" badge.
+ */
 @Composable
 private fun ThreadActions(
   discussion: GitLabDiscussion,
@@ -1736,27 +1739,21 @@ private fun ThreadActions(
 ) {
   val c = Gl.colors
   val resolved = discussion.resolved
-  if (!canWrite && !resolved) return
+  if (!canWrite) return
   Row(
     modifier = Modifier.fillMaxWidth().padding(start = GlSpace.margin, end = GlSpace.margin, bottom = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    if (resolved) {
-      GlBadge("Resolved", tone = Tone.Success, icon = Icons.Outlined.CheckCircle)
-      Spacer(Modifier.weight(1f))
-    }
-    if (canWrite) {
-      GlButton("Reply", onClick = onReply, kind = GlButtonKind.Ghost, icon = Icons.Outlined.ChatBubbleOutline, modifier = Modifier.testTag("reply_${discussion.id}"))
-      if (discussion.resolvable) {
-        GlButton(
-          text = if (resolved) "Unresolve" else "Resolve thread",
-          onClick = { onSetResolved(!resolved) },
-          kind = GlButtonKind.Secondary,
-          loading = resolving,
-          modifier = Modifier.testTag("resolve_${discussion.id}"),
-        )
-      }
+    GlButton("Reply", onClick = onReply, kind = GlButtonKind.Ghost, icon = Icons.Outlined.ChatBubbleOutline, modifier = Modifier.testTag("reply_${discussion.id}"))
+    if (discussion.resolvable) {
+      GlButton(
+        text = if (resolved) "Unresolve" else "Resolve thread",
+        onClick = { onSetResolved(!resolved) },
+        kind = GlButtonKind.Secondary,
+        loading = resolving,
+        modifier = Modifier.testTag("resolve_${discussion.id}"),
+      )
     }
   }
 }
