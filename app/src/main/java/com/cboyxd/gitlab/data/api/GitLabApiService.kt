@@ -278,6 +278,21 @@ interface GitLabApiService {
 
   @FormUrlEncoded
   @PUT("api/v4/projects/{id}/merge_requests/{mr_iid}")
+  suspend fun updateMergeRequestTitle(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Field("title") title: String,
+  ): Response<GitLabMergeRequest>
+
+  /** Starts a rebase onto the target branch; GitLab answers 202 and rebases in the background. */
+  @PUT("api/v4/projects/{id}/merge_requests/{mr_iid}/rebase")
+  suspend fun rebaseMergeRequest(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+  ): Response<ResponseBody>
+
+  @FormUrlEncoded
+  @PUT("api/v4/projects/{id}/merge_requests/{mr_iid}")
   suspend fun setMergeRequestState(
     @Path("id") projectId: Long,
     @Path("mr_iid") mrIid: Long,

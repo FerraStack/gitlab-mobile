@@ -421,6 +421,8 @@ fun MergeRequestDetailScreen(
   onReply: (discussionId: String, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
   onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
   onCancelAutoMerge: () -> Unit = {},
+  onMarkReady: () -> Unit = {},
+  onRebase: () -> Unit = {},
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
@@ -457,6 +459,8 @@ fun MergeRequestDetailScreen(
       onReply = { replyingTo = it },
       onSetResolved = onSetResolved,
       onCancelAutoMerge = onCancelAutoMerge,
+      onMarkReady = onMarkReady,
+      onRebase = onRebase,
     )
     MrPage.FILES -> FilesChangedPage(state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier)
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
@@ -556,6 +560,8 @@ private fun MergeRequestOverview(
   onReply: (discussionId: String) -> Unit = {},
   onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
   onCancelAutoMerge: () -> Unit = {},
+  onMarkReady: () -> Unit = {},
+  onRebase: () -> Unit = {},
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
@@ -656,6 +662,8 @@ private fun MergeRequestOverview(
                 currentUsername = currentUsername,
                 onSetApproved = onSetApproved,
                 onCancelAutoMerge = onCancelAutoMerge,
+                onMarkReady = onMarkReady,
+                onRebase = onRebase,
               )
             }
 
@@ -772,6 +780,8 @@ private fun StatusRows(
   currentUsername: String? = null,
   onSetApproved: (Boolean) -> Unit = {},
   onCancelAutoMerge: () -> Unit = {},
+  onMarkReady: () -> Unit = {},
+  onRebase: () -> Unit = {},
 ) {
   val c = Gl.colors
   var reviewsOpen by rememberSaveable { mutableStateOf(false) }
@@ -858,7 +868,8 @@ private fun StatusRows(
           val conflicts = mr.hasConflicts == true || mr.detailedMergeStatus == "conflict"
           val blockedReason = when {
             conflicts -> "Resolve conflicts first"
-            mr.isDraft -> "Mark as ready first"
+            mr.isDraft -> "Drafts can't be merged. Mark it as ready first."
+            mr.detailedMergeStatus == "need_rebase" -> "Rebase onto ${mr.targetBranch} first."
             else -> null
           }
           Column(Modifier.fillMaxWidth().background(c.bg).padding(start = GlSpace.margin, end = GlSpace.margin, bottom = GlSpace.margin)) {
@@ -881,6 +892,30 @@ private fun StatusRows(
             if (blockedReason != null) {
               Spacer(Modifier.height(6.dp))
               Text(blockedReason, style = Gl.type.meta, color = c.textSecondary)
+            }
+            // The fixes GitLab offers for these blocks, so they don't need the website.
+            if (mr.isDraft || mr.detailedMergeStatus == "need_rebase") {
+              Spacer(Modifier.height(GlSpace.tight))
+              Row(horizontalArrangement = Arrangement.spacedBy(GlSpace.tight)) {
+                if (mr.isDraft) {
+                  GlButton(
+                    text = "Mark as ready",
+                    onClick = onMarkReady,
+                    kind = GlButtonKind.Secondary,
+                    loading = state.busy,
+                    modifier = Modifier.testTag("mark_ready"),
+                  )
+                }
+                if (mr.detailedMergeStatus == "need_rebase") {
+                  GlButton(
+                    text = "Rebase",
+                    onClick = onRebase,
+                    kind = GlButtonKind.Secondary,
+                    loading = state.busy,
+                    modifier = Modifier.testTag("rebase"),
+                  )
+                }
+              }
             }
           }
         }

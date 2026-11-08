@@ -8,6 +8,7 @@ import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
 import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.data.repository.GitLabRepository
+import com.cboyxd.gitlab.data.repository.withoutDraftPrefix
 import com.cboyxd.gitlab.data.repository.contentRangeStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -468,5 +469,30 @@ class GitLabRepositoryTest {
     server.enqueue(MockResponse().setResponseCode(403).setBody("""{"message":"403 Forbidden"}"""))
     val error = repository.playJob(instance, 1, 41).exceptionOrNull()
     assertTrue(error is GitLabApiException && error.message!!.contains("protected environment"))
+  }
+
+  @Test
+  fun `draft prefixes are dropped the way GitLab recognizes them`() {
+    assertEquals("Fix launch", withoutDraftPrefix("Draft: Fix launch"))
+    assertEquals("Fix launch", withoutDraftPrefix("[Draft] Fix launch"))
+    assertEquals("Fix launch", withoutDraftPrefix("(draft) Fix launch"))
+    assertEquals("Fix launch", withoutDraftPrefix("WIP: Fix launch"))
+    assertEquals("Fix launch", withoutDraftPrefix("Draft - Fix launch"))
+    assertEquals("Drafting the plan", withoutDraftPrefix("Drafting the plan"))
+  }
+
+  @Test
+  fun `marking ready renames without the prefix and rebase starts on GitLab`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":1,"iid":11,"project_id":1,"title":"Rewrite the settings page","draft":false}"""))
+    server.enqueue(MockResponse().setResponseCode(202).setBody("""{"rebase_in_progress":true}"""))
+    val mr = GitLabMergeRequest(id = 1, iid = 11, projectId = 1, title = "Draft: Rewrite the settings page", draft = true)
+
+    assertEquals(false, repository.markMergeRequestReady(instance, mr).getOrThrow().draft)
+    assertTrue(repository.rebaseMergeRequest(instance, mr).isSuccess)
+
+    val rename = server.takeRequest()
+    assertEquals("PUT", rename.method)
+    assertEquals("title=Rewrite+the+settings+page", rename.body.readUtf8().replace("%20", "+"))
+    assertEquals("/api/v4/projects/1/merge_requests/11/rebase", server.takeRequest().path)
   }
 }
