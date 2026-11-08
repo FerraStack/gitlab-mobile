@@ -992,9 +992,9 @@ private fun MergeSplitButton(enabled: Boolean, loading: Boolean, onMerge: () -> 
 }
 
 @Composable
-private fun MergeButton(label: String, onClick: () -> Unit) {
+private fun MergeButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
   Box(
-    modifier = Modifier
+    modifier = modifier
       .heightIn(min = GlSpace.touch)
       .clip(RoundedCornerShape(GlRadius.control))
       .background(Gl.colors.successSolid)
@@ -1800,9 +1800,11 @@ private fun MergeDialog(mr: GitLabMergeRequest, onConfirm: (MergeOptions) -> Uni
       }
     },
     confirmButton = {
-      MergeButton(label = if (pipelineRunning) "Set to auto-merge" else "Merge", onClick = {
-        onConfirm(MergeOptions(deleteSourceBranch = deleteBranch, squash = squash, whenPipelineSucceeds = pipelineRunning))
-      })
+      MergeButton(
+        label = if (pipelineRunning) "Set to auto-merge" else "Merge",
+        onClick = { onConfirm(MergeOptions(deleteSourceBranch = deleteBranch, squash = squash, whenPipelineSucceeds = pipelineRunning)) },
+        modifier = Modifier.testTag("merge_confirm"),
+      )
     },
     dismissButton = { GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost) },
   )

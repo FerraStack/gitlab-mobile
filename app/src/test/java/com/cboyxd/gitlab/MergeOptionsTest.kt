@@ -74,13 +74,12 @@ class MergeOptionsTest {
   fun `the dialog starts from the author's choices and sends what was picked`() {
     show(mr)
     openDialog()
+    rule.onNodeWithText("Merge !12 into main?").assertExists()
     rule.onNodeWithTag("merge_delete_branch").assertIsOn()
     rule.onNodeWithTag("merge_squash").assertIsOff()
     rule.onNodeWithTag("merge_squash").performClick()
-    rule.onNodeWithText("Merge", useUnmergedTree = true).assertExists()
-    rule.onNodeWithText("Merge !12 into main?").assertExists()
-    rule.onNode(hasTestTag("merge_squash")).assertIsOn()
-    rule.onNodeWithText("Merge !12 into main?").assertExists()
+    rule.onNodeWithTag("merge_confirm").performClick()
+    assertEquals(listOf(MergeOptions(deleteSourceBranch = true, squash = true, whenPipelineSucceeds = false)), merges)
   }
 
   @Test
@@ -91,7 +90,7 @@ class MergeOptionsTest {
     show(running)
     openDialog()
     rule.onNodeWithText("Auto-merge !12?").assertExists()
-    rule.onNodeWithText("Set to auto-merge").performClick()
+    rule.onNodeWithTag("merge_confirm").performClick()
     assertEquals(listOf(MergeOptions(deleteSourceBranch = true, squash = false, whenPipelineSucceeds = true)), merges)
   }
 
