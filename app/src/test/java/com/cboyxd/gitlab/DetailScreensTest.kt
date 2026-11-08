@@ -155,6 +155,11 @@ class DetailScreensTest {
     rule.onNodeWithText("Files changed").assertIsDisplayed()
     rule.onNodeWithText("+2 −1", substring = true).assertExists()
     rule.onNodeWithText("src/launch.kt", substring = true).assertExists()
+    // Diff lines are parsed on Dispatchers.Default, which waitForIdle() doesn't wait for: wait
+    // for the parsed line itself instead of racing it.
+    rule.waitUntil(timeoutMillis = 5_000) {
+      rule.onAllNodesWithText("ignite()", substring = true).fetchSemanticsNodes().isNotEmpty()
+    }
     rule.onNodeWithText("ignite()", substring = true).assertExists()
   }
 }
