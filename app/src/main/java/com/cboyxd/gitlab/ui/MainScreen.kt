@@ -604,6 +604,8 @@ private fun Destination(
       onOpenUser = viewModel.explore::openUser,
       onOpenInBrowser = browser,
       onBack = back,
+      currentUsername = (uiState.currentUser.data?.username ?: uiState.activeInstance?.username)?.takeIf { it.isNotBlank() },
+      onSetApproved = viewModel.review::setApproved,
     )
     is ScreenDestination.PipelineDetail -> PipelineDetailScreen(
       state = uiState.pipelineDetail,
