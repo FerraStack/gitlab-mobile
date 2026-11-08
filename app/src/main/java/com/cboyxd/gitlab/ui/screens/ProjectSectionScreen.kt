@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.NewReleases
 import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -133,6 +134,14 @@ fun ProjectSectionScreen(
     GlTopBar(title = section.title, overline = state.project.data?.nameWithNamespace, onBack = onBack) {
       if (section == ProjectSection.MERGE_REQUESTS && canWrite && state.project.data != null) {
         com.cboyxd.gitlab.ui.components.GlIconAction(Icons.Outlined.Add, "New merge request", onClick = { creating = true })
+      }
+      if (section == ProjectSection.PIPELINES && canWrite && state.project.data != null) {
+        com.cboyxd.gitlab.ui.components.GlIconAction(
+          Icons.Outlined.PlayArrow,
+          "Run pipeline",
+          onClick = { onNavigate(ScreenDestination.RunPipeline(state.projectId)) },
+          modifier = Modifier.testTag("run_pipeline"),
+        )
       }
     }
     when (section) {

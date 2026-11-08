@@ -772,6 +772,15 @@ class GitLabRepository {
     fetchPages(maxPages = 5) { page -> service(instance).getPipelineJobs(projectId, pipelineId, page = page) }.sortedBy { it.id }
   }
 
+  /** Runs a new pipeline on [ref]. GitLab's own reason is shown when it refuses (no jobs, unknown ref). */
+  suspend fun runPipeline(instance: GitLabInstance, projectId: Long, ref: String): Result<GitLabPipeline> = call {
+    requireToken(instance)
+    if (ref.isBlank()) throw GitLabApiException(400, "Enter a branch or tag.")
+    val response = service(instance).createPipeline(projectId, ref.trim())
+    if (response.code() == 403) throw GitLabApiException(403, "You can't run pipelines in this project.")
+    response.requireBody()
+  }
+
   suspend fun cancelPipeline(instance: GitLabInstance, projectId: Long, pipelineId: Long): Result<GitLabPipeline> = call {
     requireToken(instance)
     service(instance).cancelPipeline(projectId, pipelineId).requireBody().withDisplayTimes()

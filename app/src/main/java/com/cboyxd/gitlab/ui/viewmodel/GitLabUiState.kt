@@ -59,6 +59,8 @@ sealed class ScreenDestination {
   data class ProjectSectionList(val projectId: Long, val section: ProjectSection) : ScreenDestination()
   data class FileViewer(val projectId: Long, val filePath: String, val ref: String? = null) : ScreenDestination()
   data class CommitDetail(val projectId: Long, val sha: String) : ScreenDestination()
+  /** The "Run pipeline" form for a project. */
+  data class RunPipeline(val projectId: Long) : ScreenDestination()
   data class PipelineDetail(val projectId: Long, val pipelineId: Long) : ScreenDestination()
   data class JobDetail(val projectId: Long, val jobId: Long) : ScreenDestination()
   data class ReleaseDetail(val projectId: Long, val tagName: String) : ScreenDestination()

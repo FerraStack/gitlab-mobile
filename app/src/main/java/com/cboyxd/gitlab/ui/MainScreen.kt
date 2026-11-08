@@ -89,6 +89,7 @@ import com.cboyxd.gitlab.ui.components.GlDivider
 import com.cboyxd.gitlab.ui.components.GlRow
 import com.cboyxd.gitlab.ui.components.GlSectionHeader
 import com.cboyxd.gitlab.ui.screens.FileViewerScreen
+import com.cboyxd.gitlab.ui.screens.RunPipelineScreen
 import com.cboyxd.gitlab.ui.screens.StorageErrorState
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.ProjectSection
@@ -614,6 +615,21 @@ private fun Destination(
       onCancelAutoMerge = viewModel.review::cancelAutoMerge,
       onMarkReady = viewModel.review::markReady,
       onRebase = viewModel.review::rebase,
+    )
+    is ScreenDestination.RunPipeline -> RunPipelineScreen(
+      projectPath = project.project.data?.pathWithNamespace,
+      defaultRef = project.effectiveRef.orEmpty(),
+      onRun = { ref, done ->
+        viewModel.ci.runPipeline(destination.projectId, ref) { error ->
+          if (error == null) {
+            // Replace the form with the new pipeline (opened by runPipeline) and refresh the list.
+            viewModel.navigateBack()
+            viewModel.code.retrySection(ProjectSection.PIPELINES)
+          }
+          done(error)
+        }
+      },
+      onBack = back,
     )
     is ScreenDestination.PipelineDetail -> PipelineDetailScreen(
       state = uiState.pipelineDetail,

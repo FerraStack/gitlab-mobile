@@ -53,6 +53,20 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
     if (destination !is ScreenDestination.JobDetail) jobJob?.cancel()
   }
 
+  /** Runs a pipeline on [ref], opens it, and lets [onResult] know (null on success, else the reason). */
+  fun runPipeline(projectId: Long, ref: String, onResult: (String?) -> Unit) {
+    host.session.launch {
+      host.api { host.repository.runPipeline(it, projectId, ref) }.fold(
+        onSuccess = { pipeline ->
+          onResult(null)
+          host.notify("Started pipeline #${pipeline.id} on ${pipeline.ref.ifBlank { ref }}")
+          openPipeline(projectId, pipeline.id)
+        },
+        onFailure = { onResult(it.userMessage()) },
+      )
+    }
+  }
+
   fun openPipeline(projectId: Long, pipelineId: Long) = host.navigateTo(ScreenDestination.PipelineDetail(projectId, pipelineId))
 
   fun openJob(projectId: Long, jobId: Long) = host.navigateTo(ScreenDestination.JobDetail(projectId, jobId))

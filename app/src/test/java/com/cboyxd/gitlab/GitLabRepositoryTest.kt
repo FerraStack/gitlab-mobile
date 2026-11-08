@@ -495,4 +495,21 @@ class GitLabRepositoryTest {
     assertEquals("title=Rewrite+the+settings+page", rename.body.readUtf8().replace("%20", "+"))
     assertEquals("/api/v4/projects/1/merge_requests/11/rebase", server.takeRequest().path)
   }
+
+  @Test
+  fun `pipelines run on the chosen ref`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":901,"status":"created","ref":"release/1.5"}"""))
+    assertEquals(901L, repository.runPipeline(instance, 1, " release/1.5 ").getOrThrow().id)
+    val request = server.takeRequest()
+    assertEquals("POST", request.method)
+    assertEquals("release/1.5", request.requestUrl!!.queryParameter("ref"))
+    assertEquals("/api/v4/projects/1/pipeline", request.requestUrl!!.encodedPath)
+  }
+
+  @Test
+  fun `gitlab's reason for refusing a pipeline is shown`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(400).setBody("""{"message":{"base":["Reference not found"]}}"""))
+    val error = repository.runPipeline(instance, 1, "nope").exceptionOrNull()
+    assertTrue(error is GitLabApiException && error.code == 400)
+  }
 }
