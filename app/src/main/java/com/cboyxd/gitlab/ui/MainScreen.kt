@@ -599,6 +599,8 @@ private fun Destination(
       onMerge = viewModel.review::merge,
       onSetClosed = viewModel.review::setClosed,
       onComment = viewModel.review::postNote,
+      onReply = viewModel.review::reply,
+      onSetResolved = viewModel.review::setResolved,
       onOpenPipeline = { viewModel.ci.openPipeline(it.projectId.takeIf { id -> id > 0 } ?: uiState.mergeRequestDetail.projectId, it.id) },
       onOpenCommit = { viewModel.code.openCommit(uiState.mergeRequestDetail.projectId, it) },
       onOpenUser = viewModel.explore::openUser,
