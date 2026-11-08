@@ -607,6 +607,8 @@ private fun Destination(
       currentUsername = (uiState.currentUser.data?.username ?: uiState.activeInstance?.username)?.takeIf { it.isNotBlank() },
       onSetApproved = viewModel.review::setApproved,
       onCancelAutoMerge = viewModel.review::cancelAutoMerge,
+      onMarkReady = viewModel.review::markReady,
+      onRebase = viewModel.review::rebase,
     )
     is ScreenDestination.PipelineDetail -> PipelineDetailScreen(
       state = uiState.pipelineDetail,

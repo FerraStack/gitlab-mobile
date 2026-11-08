@@ -114,6 +114,43 @@ class ReviewFeature internal constructor(
     }
   }
 
+  fun markReady() {
+    val mr = detail.mergeRequest.data ?: return
+    if (detail.busy) return
+    apply(mr.projectId, mr.iid) { it.copy(busy = true) }
+    host.session.launch {
+      host.api { host.repository.markMergeRequestReady(it, mr) }.fold(
+        onSuccess = { updated ->
+          replace(updated)
+          host.notify("!${updated.iid} is ready")
+        },
+        onFailure = { error ->
+          apply(mr.projectId, mr.iid) { it.copy(busy = false) }
+          host.notifyError(error.userMessage())
+        },
+      )
+    }
+  }
+
+  /** Starts a rebase, then reloads the merge request once GitLab had time to finish it. */
+  fun rebase() {
+    val mr = detail.mergeRequest.data ?: return
+    if (detail.busy) return
+    apply(mr.projectId, mr.iid) { it.copy(busy = true) }
+    host.session.launch {
+      val started = host.api { host.repository.rebaseMergeRequest(it, mr) }
+      started.exceptionOrNull()?.let { error ->
+        apply(mr.projectId, mr.iid) { it.copy(busy = false) }
+        host.notifyError(error.userMessage())
+        return@launch
+      }
+      host.notify("Rebasing !${mr.iid} onto ${mr.targetBranch}…")
+      kotlinx.coroutines.delay(REBASE_SETTLE_MS)
+      val fresh = host.api { host.repository.getMergeRequest(it, mr.projectId, mr.iid) }.getOrNull()
+      if (fresh != null) replace(fresh) else apply(mr.projectId, mr.iid) { it.copy(busy = false) }
+    }
+  }
+
   fun cancelAutoMerge() {
     val mr = detail.mergeRequest.data ?: return
     if (detail.busy) return
@@ -282,3 +319,5 @@ class ReviewFeature internal constructor(
     }
   }
 }
+
+private const val REBASE_SETTLE_MS = 4_000L

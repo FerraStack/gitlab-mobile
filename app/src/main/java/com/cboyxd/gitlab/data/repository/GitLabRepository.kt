@@ -414,6 +414,25 @@ class GitLabRepository {
     response.requireBody().withDisplayTimes()
   }
 
+  /** Marks a draft as ready by dropping its draft prefix, as GitLab's "Mark as ready" does. */
+  suspend fun markMergeRequestReady(instance: GitLabInstance, mr: GitLabMergeRequest): Result<GitLabMergeRequest> = call {
+    requireToken(instance)
+    val title = withoutDraftPrefix(mr.title)
+    if (title.isBlank()) throw GitLabApiException(400, "The title can't be empty without its draft prefix.")
+    service(instance).updateMergeRequestTitle(mr.projectId, mr.iid, title).requireBody().withDisplayTimes()
+  }
+
+  suspend fun rebaseMergeRequest(instance: GitLabInstance, mr: GitLabMergeRequest): Result<Unit> = call {
+    requireToken(instance)
+    val response = service(instance).rebaseMergeRequest(mr.projectId, mr.iid)
+    when (response.code()) {
+      403 -> throw GitLabApiException(403, "You can't rebase this merge request.")
+      409 -> throw GitLabApiException(409, "A rebase is already running.")
+    }
+    if (!response.isSuccessful) throw response.toGitLabException()
+    response.body()?.close()
+  }
+
   suspend fun cancelAutoMerge(instance: GitLabInstance, mr: GitLabMergeRequest): Result<GitLabMergeRequest> = call {
     requireToken(instance)
     service(instance).cancelAutoMerge(mr.projectId, mr.iid).requireBody().withDisplayTimes()
@@ -1029,6 +1048,11 @@ class GitLabRepository {
     const val PROJECT_PAGE_SIZE = 50
   }
 }
+
+private val DRAFT_PREFIX = Regex("""^\s*(?:(?:\[draft]|\(draft\)|draft:|draft\s+-|wip:)\s*)+""", RegexOption.IGNORE_CASE)
+
+/** [title] without GitLab's draft markers ("Draft:", "[Draft]", "(Draft)", "Draft -", old "WIP:"). */
+internal fun withoutDraftPrefix(title: String): String = title.replace(DRAFT_PREFIX, "").trim()
 
 /** The first byte of a `Content-Range: bytes 1000-1999/2000` header, or null. */
 internal fun contentRangeStart(header: String?): Long? =
