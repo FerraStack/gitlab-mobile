@@ -101,6 +101,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -743,6 +744,7 @@ private fun StatusRows(
   Column {
     val reviewSummary = when {
       approvers.isNotEmpty() -> "Approved by ${approvers.joinToString { it.name.ifBlank { it.username } }}"
+      state.approvals.initialLoading -> "Checking approvals…"
       (approvals?.approvalsLeft ?: 0) > 0 -> plural(approvals!!.approvalsLeft!!, "approval required", "approvals required")
       mr.reviewers.isNotEmpty() -> plural(mr.reviewers.size, "reviewer", "reviewers")
       else -> "None requested"
@@ -778,7 +780,16 @@ private fun StatusRows(
     GlDivider()
     when (mr.state) {
       "opened" -> {
-        val (headline, detail, tone) = mergeReadiness(mr)
+        // Never say "Ready to merge" from list data: wait for the fresh merge request (its
+        // detailed_merge_status and head pipeline) and the approvals before offering to merge.
+        val checking = mergeStatusPending(state)
+        // GitLab's merge status can lag behind approvals; required approvals always block.
+        val approvalsMissing = (state.approvals.data?.approvalsLeft ?: 0) > 0
+        val (headline, detail, tone) = when {
+          checking -> Triple("Checking merge status…", null, Tone.Neutral)
+          approvalsMissing -> Triple("Approval required", "This merge request needs approval before merging.", Tone.Warning)
+          else -> mergeReadiness(mr)
+        }
         val (fg, _) = toneColors(tone)
         DetailRow(
           icon = when (tone) {
@@ -800,7 +811,7 @@ private fun StatusRows(
           }
           Column(Modifier.fillMaxWidth().background(c.bg).padding(start = GlSpace.margin, end = GlSpace.margin, bottom = GlSpace.margin)) {
             MergeSplitButton(
-              enabled = blockedReason == null && !state.busy,
+              enabled = !checking && !approvalsMissing && blockedReason == null && !state.busy,
               loading = state.busy,
               onMerge = onRequestMerge,
               onClose = { onSetClosed(true) },
@@ -843,6 +854,13 @@ private fun StatusRows(
   }
 }
 
+/**
+ * Whether the merge decision can't be shown yet: the merge request itself (detailed_merge_status,
+ * head pipeline) is still being fetched, or its approvals are.
+ */
+internal fun mergeStatusPending(state: MergeRequestDetailState): Boolean =
+  state.mergeRequest.loading || state.approvals.loading
+
 /** Headline, explanation and tone for an open merge request, from detailed_merge_status. */
 private fun mergeReadiness(mr: GitLabMergeRequest): Triple<String, String?, Tone> {
   if (mr.isDraft) return Triple("Draft", "Mark it as ready before merging.", Tone.Neutral)
@@ -876,7 +894,8 @@ private fun MergeSplitButton(enabled: Boolean, loading: Boolean, onMerge: () -> 
       modifier = Modifier
         .weight(1f)
         .heightIn(min = 52.dp)
-        .pressable(onClick = onMerge, enabled = enabled && !loading, scaleOnPress = false),
+        .pressable(onClick = onMerge, enabled = enabled && !loading, scaleOnPress = false)
+        .testTag("merge_button"),
       contentAlignment = Alignment.Center,
     ) {
       if (loading) {

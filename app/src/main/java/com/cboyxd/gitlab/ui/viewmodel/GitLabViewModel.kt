@@ -212,7 +212,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       is ScreenDestination.PipelineDetail -> ready(s.pipelineDetail.pipeline, s.pipelineDetail.jobs)
       is ScreenDestination.JobDetail -> ready(s.jobDetail.job, s.jobDetail.trace)
       is ScreenDestination.IssueDetail -> ready(s.issueDetail.issue, s.issueDetail.notes)
-      is ScreenDestination.MergeRequestDetail -> s.mergeRequestDetail.run { ready(mergeRequest, diffs, notes, discussions, commits, pipelines, approvals) }
+      is ScreenDestination.MergeRequestDetail -> mergeRequestReadyToOpen(s.mergeRequestDetail)
       is ScreenDestination.UserDetail -> s.userDetail.run { ready(user, projects, events) }
       is ScreenDestination.GroupProjects -> s.group.run { ready(details, subgroups, projects) }
       else -> true
@@ -1154,3 +1154,12 @@ private fun GitLabTodo.toNotification(): GitLabNotification {
     statusBadge = badge.ifBlank { null }
   )
 }
+
+/**
+ * A merge request opens as soon as its own summary is there: at once when a list already had it,
+ * otherwise after the single-MR request. Changes, threads, commits, pipelines and approvals keep
+ * loading on the page with their own spinners; a large MR's hundred diff pages no longer hold
+ * the screen on "Opening…".
+ */
+internal fun mergeRequestReadyToOpen(d: MergeRequestDetailState): Boolean =
+  d.mergeRequest.error != null || (d.mergeRequest.loaded && d.mergeRequest.data != null)
