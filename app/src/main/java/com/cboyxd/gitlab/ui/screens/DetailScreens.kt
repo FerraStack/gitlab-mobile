@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -78,6 +79,7 @@ import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -119,6 +121,7 @@ import com.cboyxd.gitlab.data.model.resolved
 import com.cboyxd.gitlab.data.model.GitLabIssue
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.ui.components.DiscussionDiffPreview
 import com.cboyxd.gitlab.data.model.GitLabNote
 import com.cboyxd.gitlab.data.model.GitLabPipeline
@@ -403,7 +406,7 @@ fun MergeRequestDetailScreen(
   canWrite: Boolean,
   onLink: (String) -> Boolean,
   onRetry: () -> Unit,
-  onMerge: () -> Unit,
+  onMerge: (MergeOptions) -> Unit,
   onSetClosed: (Boolean) -> Unit,
   onComment: (String, (String?) -> Unit) -> Unit,
   onOpenPipeline: (GitLabPipeline) -> Unit,
@@ -417,6 +420,7 @@ fun MergeRequestDetailScreen(
   onSetApproved: (Boolean) -> Unit = {},
   onReply: (discussionId: String, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
   onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
+  onCancelAutoMerge: () -> Unit = {},
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
@@ -452,6 +456,7 @@ fun MergeRequestDetailScreen(
       onSetApproved = onSetApproved,
       onReply = { replyingTo = it },
       onSetResolved = onSetResolved,
+      onCancelAutoMerge = onCancelAutoMerge,
     )
     MrPage.FILES -> FilesChangedPage(state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier)
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
@@ -488,25 +493,13 @@ fun MergeRequestDetailScreen(
   }
 
   if (confirmMerge && mr != null) {
-    val c = Gl.colors
-    AlertDialog(
-      onDismissRequest = { confirmMerge = false },
-      containerColor = c.surface,
-      title = { Text("Merge !${mr.iid} into ${mr.targetBranch}?", style = Gl.type.title, color = c.textPrimary) },
-      text = {
-        Text(
-          "Merging adds the changes from ${mr.sourceBranch} to ${mr.targetBranch}. This can't be undone from the app.",
-          style = Gl.type.bodySmall,
-          color = c.textSecondary,
-        )
+    MergeDialog(
+      mr = mr,
+      onConfirm = { options ->
+        confirmMerge = false
+        onMerge(options)
       },
-      confirmButton = {
-        MergeButton(label = "Merge", onClick = {
-          confirmMerge = false
-          onMerge()
-        })
-      },
-      dismissButton = { GlButton(text = "Cancel", onClick = { confirmMerge = false }, kind = GlButtonKind.Ghost) },
+      onDismiss = { confirmMerge = false },
     )
   }
   if (composing) {
@@ -562,6 +555,7 @@ private fun MergeRequestOverview(
   onSetApproved: (Boolean) -> Unit = {},
   onReply: (discussionId: String) -> Unit = {},
   onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
+  onCancelAutoMerge: () -> Unit = {},
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
@@ -661,6 +655,7 @@ private fun MergeRequestOverview(
                 onOpenUser = onOpenUser,
                 currentUsername = currentUsername,
                 onSetApproved = onSetApproved,
+                onCancelAutoMerge = onCancelAutoMerge,
               )
             }
 
@@ -776,6 +771,7 @@ private fun StatusRows(
   onOpenUser: (GitLabUser) -> Unit,
   currentUsername: String? = null,
   onSetApproved: (Boolean) -> Unit = {},
+  onCancelAutoMerge: () -> Unit = {},
 ) {
   val c = Gl.colors
   var reviewsOpen by rememberSaveable { mutableStateOf(false) }
@@ -839,8 +835,10 @@ private fun StatusRows(
         val checking = mergeStatusPending(state)
         // GitLab's merge status can lag behind approvals; required approvals always block.
         val approvalsMissing = (state.approvals.data?.approvalsLeft ?: 0) > 0
+        val autoMerge = mr.mergeWhenPipelineSucceeds == true
         val (headline, detail, tone) = when {
           checking -> Triple("Checking merge status…", null, Tone.Neutral)
+          autoMerge -> Triple("Set to auto-merge", "Merges into ${mr.targetBranch} when the pipeline succeeds.", Tone.Info)
           approvalsMissing -> Triple("Approval required", "This merge request needs approval before merging.", Tone.Warning)
           else -> mergeReadiness(mr)
         }
@@ -849,7 +847,7 @@ private fun StatusRows(
           icon = when (tone) {
             Tone.Success -> Icons.Outlined.CheckCircle
             Tone.Danger -> Icons.Outlined.ErrorOutline
-            Tone.Warning -> Icons.Outlined.Schedule
+            Tone.Warning, Tone.Info -> Icons.Outlined.Schedule
             else -> Icons.Outlined.RadioButtonUnchecked
           },
           iconTint = fg,
@@ -864,6 +862,16 @@ private fun StatusRows(
             else -> null
           }
           Column(Modifier.fillMaxWidth().background(c.bg).padding(start = GlSpace.margin, end = GlSpace.margin, bottom = GlSpace.margin)) {
+            if (autoMerge) {
+              GlButton(
+                text = "Cancel auto-merge",
+                onClick = onCancelAutoMerge,
+                kind = GlButtonKind.Secondary,
+                loading = state.busy,
+                modifier = Modifier.fillMaxWidth().testTag("cancel_auto_merge"),
+              )
+              return@Column
+            }
             MergeSplitButton(
               enabled = !checking && !approvalsMissing && blockedReason == null && !state.busy,
               loading = state.busy,
@@ -984,9 +992,9 @@ private fun MergeSplitButton(enabled: Boolean, loading: Boolean, onMerge: () -> 
 }
 
 @Composable
-private fun MergeButton(label: String, onClick: () -> Unit) {
+private fun MergeButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
   Box(
-    modifier = Modifier
+    modifier = modifier
       .heightIn(min = GlSpace.touch)
       .clip(RoundedCornerShape(GlRadius.control))
       .background(Gl.colors.successSolid)
@@ -1757,3 +1765,67 @@ private fun ThreadActions(
     }
   }
 }
+
+/**
+ * Confirms a merge with the choices GitLab's web UI offers. Defaults come from the merge request
+ * (the author's "delete source branch" and squash settings). While the pipeline still runs, the
+ * action is to set the merge request to auto-merge instead.
+ */
+@Composable
+private fun MergeDialog(mr: GitLabMergeRequest, onConfirm: (MergeOptions) -> Unit, onDismiss: () -> Unit) {
+  val c = Gl.colors
+  var deleteBranch by rememberSaveable(mr.iid) { mutableStateOf(mr.forceRemoveSourceBranch ?: mr.removeSourceBranch ?: false) }
+  var squash by rememberSaveable(mr.iid) { mutableStateOf(mr.squash ?: false) }
+  val pipelineRunning = mergeWaitsForPipeline(mr)
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    containerColor = c.surface,
+    title = {
+      Text(
+        if (pipelineRunning) "Auto-merge !${mr.iid}?" else "Merge !${mr.iid} into ${mr.targetBranch}?",
+        style = Gl.type.title,
+        color = c.textPrimary,
+      )
+    },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+          if (pipelineRunning) "The pipeline is still running. GitLab merges ${mr.sourceBranch} into ${mr.targetBranch} when it succeeds."
+          else "Merging adds the changes from ${mr.sourceBranch} to ${mr.targetBranch}. This can't be undone from the app.",
+          style = Gl.type.bodySmall,
+          color = c.textSecondary,
+        )
+        MergeOption("Delete source branch", deleteBranch, { deleteBranch = it }, Modifier.testTag("merge_delete_branch"))
+        MergeOption("Squash commits", squash, { squash = it }, Modifier.testTag("merge_squash"))
+      }
+    },
+    confirmButton = {
+      MergeButton(
+        label = if (pipelineRunning) "Set to auto-merge" else "Merge",
+        onClick = { onConfirm(MergeOptions(deleteSourceBranch = deleteBranch, squash = squash, whenPipelineSucceeds = pipelineRunning)) },
+        modifier = Modifier.testTag("merge_confirm"),
+      )
+    },
+    dismissButton = { GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost) },
+  )
+}
+
+@Composable
+private fun MergeOption(label: String, checked: Boolean, onChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange)
+      .heightIn(min = GlSpace.touch),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Checkbox(checked = checked, onCheckedChange = null)
+    Spacer(Modifier.width(8.dp))
+    Text(label, style = Gl.type.body, color = Gl.colors.textPrimary)
+  }
+}
+
+/** The head pipeline is still going, so merging now would fail; offer auto-merge instead. */
+internal fun mergeWaitsForPipeline(mr: GitLabMergeRequest): Boolean =
+  mr.headPipeline?.status in setOf("running", "pending", "created", "preparing", "waiting_for_resource") ||
+    mr.detailedMergeStatus == "ci_still_running"

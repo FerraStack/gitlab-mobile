@@ -6,6 +6,7 @@ import com.cboyxd.gitlab.data.api.normalizeBaseUrl
 import com.cboyxd.gitlab.data.auth.GitLabAuth
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.data.repository.GitLabRepository
 import com.cboyxd.gitlab.data.repository.contentRangeStart
 import kotlinx.coroutines.CancellationException
@@ -420,5 +421,33 @@ class GitLabRepositoryTest {
     val request = server.takeRequest()
     assertEquals("PUT", request.method)
     assertEquals("/api/v4/projects/1/merge_requests/12/discussions/abc123?resolved=true", request.path)
+  }
+
+  @Test
+  fun `merge options are sent, and unset ones keep the merge request's own settings`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":1,"iid":12,"project_id":1,"title":"t","state":"merged"}"""))
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":1,"iid":12,"project_id":1,"title":"t","state":"opened","merge_when_pipeline_succeeds":true}"""))
+    val mr = GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "t", sha = "abc")
+
+    repository.mergeMergeRequest(instance, mr, MergeOptions(deleteSourceBranch = true, squash = true)).getOrThrow()
+    val auto = repository.mergeMergeRequest(instance, mr, MergeOptions(whenPipelineSucceeds = true)).getOrThrow()
+
+    val first = server.takeRequest().body.readUtf8()
+    assertTrue(first.contains("should_remove_source_branch=true"))
+    assertTrue(first.contains("squash=true"))
+    assertTrue(!first.contains("merge_when_pipeline_succeeds"))
+    val second = server.takeRequest().body.readUtf8()
+    assertTrue(second.contains("merge_when_pipeline_succeeds=true"))
+    // No longer forces "keep the branch" over the author's choice.
+    assertTrue(!second.contains("should_remove_source_branch"))
+    assertEquals(true, auto.mergeWhenPipelineSucceeds)
+  }
+
+  @Test
+  fun `auto-merge can be canceled`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":1,"iid":12,"project_id":1,"title":"t","state":"opened","merge_when_pipeline_succeeds":false}"""))
+    val mr = repository.cancelAutoMerge(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "t")).getOrThrow()
+    assertEquals(false, mr.mergeWhenPipelineSucceeds)
+    assertEquals("/api/v4/projects/1/merge_requests/12/cancel_merge_when_pipeline_succeeds", server.takeRequest().path)
   }
 }

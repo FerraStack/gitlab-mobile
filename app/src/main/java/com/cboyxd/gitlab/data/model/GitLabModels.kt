@@ -238,10 +238,22 @@ data class GitLabMergeRequest(
   @Json(name = "time_stats") val timeStats: GitLabTimeStats? = null,
   @Json(name = "blocking_discussions_resolved") val discussionsResolved: Boolean? = null,
   @Json(name = "source_project_id") val sourceProjectId: Long? = null,
-  @Json(name = "should_remove_source_branch") val removeSourceBranch: Boolean? = null
+  @Json(name = "should_remove_source_branch") val removeSourceBranch: Boolean? = null,
+  /** The author's "Delete source branch when merged" choice. */
+  @Json(name = "force_remove_source_branch") val forceRemoveSourceBranch: Boolean? = null,
+  /** Set to auto-merge: merges when the pipeline succeeds. */
+  @Json(name = "merge_when_pipeline_succeeds") val mergeWhenPipelineSucceeds: Boolean? = null,
 ) {
   val isDraft: Boolean get() = draft || workInProgress
 }
+
+/** Choices made when merging; null leaves GitLab's own default. */
+data class MergeOptions(
+  val deleteSourceBranch: Boolean? = null,
+  val squash: Boolean? = null,
+  /** Instead of merging now, merge when the running pipeline succeeds. */
+  val whenPipelineSucceeds: Boolean = false,
+)
 
 @JsonClass(generateAdapter = true)
 data class GitLabPipeline(

@@ -25,6 +25,7 @@ import com.cboyxd.gitlab.data.model.GitLabGroup
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabIssue
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.data.model.GitLabNote
 import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabProject
@@ -394,16 +395,28 @@ class GitLabRepository {
       .requireBody().withDisplayTimes()
   }
 
-  suspend fun mergeMergeRequest(instance: GitLabInstance, mr: GitLabMergeRequest): Result<GitLabMergeRequest> = call {
+  suspend fun mergeMergeRequest(instance: GitLabInstance, mr: GitLabMergeRequest, options: MergeOptions = MergeOptions()): Result<GitLabMergeRequest> = call {
     requireToken(instance)
     // Pin the merge to the commit the user saw, so commits pushed after the review aren't merged.
-    val response = service(instance).mergeMergeRequest(mr.projectId, mr.iid, sha = mr.sha?.takeIf { it.isNotBlank() })
+    val response = service(instance).mergeMergeRequest(
+      mr.projectId,
+      mr.iid,
+      removeSourceBranch = options.deleteSourceBranch,
+      sha = mr.sha?.takeIf { it.isNotBlank() },
+      squash = options.squash,
+      whenPipelineSucceeds = options.whenPipelineSucceeds.takeIf { it },
+    )
     when (response.code()) {
       405 -> throw GitLabApiException(405, "This merge request can't be merged yet. Resolve its blocking items in GitLab, then try again.")
       406 -> throw GitLabApiException(406, "This merge request has conflicts. Resolve them, then merge.")
       409 -> throw GitLabApiException(409, "The source branch changed since you opened this merge request. Refresh it, review the new commits, then merge.")
     }
     response.requireBody().withDisplayTimes()
+  }
+
+  suspend fun cancelAutoMerge(instance: GitLabInstance, mr: GitLabMergeRequest): Result<GitLabMergeRequest> = call {
+    requireToken(instance)
+    service(instance).cancelAutoMerge(mr.projectId, mr.iid).requireBody().withDisplayTimes()
   }
 
   suspend fun getMergeRequestDiffs(

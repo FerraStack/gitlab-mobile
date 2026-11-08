@@ -289,9 +289,18 @@ interface GitLabApiService {
   suspend fun mergeMergeRequest(
     @Path("id") projectId: Long,
     @Path("mr_iid") mrIid: Long,
-    @Field("should_remove_source_branch") removeSourceBranch: Boolean = false,
+    /** Null keeps the merge request's own setting (the author's choice). */
+    @Field("should_remove_source_branch") removeSourceBranch: Boolean? = null,
     /** The head the user reviewed; GitLab refuses with 409 if the branch moved since. Null is omitted. */
     @Field("sha") sha: String? = null,
+    @Field("squash") squash: Boolean? = null,
+    @Field("merge_when_pipeline_succeeds") whenPipelineSucceeds: Boolean? = null,
+  ): Response<GitLabMergeRequest>
+
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/cancel_merge_when_pipeline_succeeds")
+  suspend fun cancelAutoMerge(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
   ): Response<GitLabMergeRequest>
 
   @GET("api/v4/projects/{id}/merge_requests/{mr_iid}/diffs")

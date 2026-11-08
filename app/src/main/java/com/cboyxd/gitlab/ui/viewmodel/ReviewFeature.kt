@@ -96,20 +96,38 @@ class ReviewFeature internal constructor(
     }
   }
 
-  fun merge() {
+  fun merge(options: com.cboyxd.gitlab.data.model.MergeOptions = com.cboyxd.gitlab.data.model.MergeOptions()) {
     val mr = detail.mergeRequest.data ?: return
     if (detail.busy) return
     apply(mr.projectId, mr.iid) { it.copy(busy = true) }
     host.session.launch {
-      host.api { host.repository.mergeMergeRequest(it, mr) }.fold(
+      host.api { host.repository.mergeMergeRequest(it, mr, options) }.fold(
         onSuccess = { updated ->
           replace(updated)
-          host.notify("Merged !${updated.iid}")
+          host.notify(if (updated.state == "merged") "Merged !${updated.iid}" else "!${updated.iid} will merge when the pipeline succeeds")
         },
         onFailure = { error ->
           apply(mr.projectId, mr.iid) { it.copy(busy = false) }
           host.notifyError(error.userMessage())
         }
+      )
+    }
+  }
+
+  fun cancelAutoMerge() {
+    val mr = detail.mergeRequest.data ?: return
+    if (detail.busy) return
+    apply(mr.projectId, mr.iid) { it.copy(busy = true) }
+    host.session.launch {
+      host.api { host.repository.cancelAutoMerge(it, mr) }.fold(
+        onSuccess = { updated ->
+          replace(updated)
+          host.notify("Auto-merge canceled")
+        },
+        onFailure = { error ->
+          apply(mr.projectId, mr.iid) { it.copy(busy = false) }
+          host.notifyError(error.userMessage())
+        },
       )
     }
   }
