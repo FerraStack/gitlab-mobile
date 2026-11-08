@@ -532,6 +532,14 @@ interface GitLabApiService {
     @Path("job_id") jobId: Long
   ): Response<GitLabJob>
 
+  /** The job's artifacts archive, streamed straight to where the user chose to save it. */
+  @Streaming
+  @GET("api/v4/projects/{id}/jobs/{job_id}/artifacts")
+  suspend fun downloadJobArtifacts(
+    @Path("id") projectId: Long,
+    @Path("job_id") jobId: Long,
+  ): Response<ResponseBody>
+
   /** Starts a manual job. */
   @POST("api/v4/projects/{id}/jobs/{job_id}/play")
   suspend fun playJob(

@@ -767,6 +767,24 @@ class GitLabRepository {
     service(instance).retryJob(projectId, jobId).requireBody()
   }
 
+  /**
+   * Copies the job's artifacts archive into [open]'s stream and returns the bytes written. The
+   * body is streamed, so archives far larger than memory are fine.
+   */
+  suspend fun downloadJobArtifacts(instance: GitLabInstance, projectId: Long, jobId: Long, open: () -> java.io.OutputStream?): Result<Long> = call {
+    val response = GitLabApiClient.createDownloadService(instance).downloadJobArtifacts(projectId, jobId)
+    if (response.code() == 404) {
+      response.errorBody()?.close()
+      throw GitLabApiException(404, "This job has no artifacts any more. They may have expired.")
+    }
+    if (!response.isSuccessful) throw response.toGitLabException()
+    val body = response.body() ?: throw GitLabApiException(response.code(), "The server sent no archive.")
+    body.use { b ->
+      val out = open() ?: throw GitLabApiException(0, "Couldn't open the file to save to.")
+      out.use { b.byteStream().copyTo(it) }
+    }
+  }
+
   /** Runs a manual job. Protected environments and branches can refuse (403). */
   suspend fun playJob(instance: GitLabInstance, projectId: Long, jobId: Long): Result<GitLabJob> = call {
     requireToken(instance)

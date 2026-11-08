@@ -304,7 +304,15 @@ data class GitLabJob(
   val coverage: Double? = null,
   val runner: GitLabRunner? = null,
   val user: GitLabUser? = null,
-  @Json(name = "tag_list") val tagList: List<String> = emptyList()
+  @Json(name = "tag_list") val tagList: List<String> = emptyList(),
+  /** The job's downloadable artifacts archive; null when it kept none (or they expired). */
+  @Json(name = "artifacts_file") val artifactsFile: GitLabArtifactsFile? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabArtifactsFile(
+  val filename: String = "",
+  val size: Long = 0,
 )
 
 @JsonClass(generateAdapter = true)

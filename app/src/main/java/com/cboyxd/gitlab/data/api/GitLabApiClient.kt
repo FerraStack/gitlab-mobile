@@ -64,15 +64,22 @@ object GitLabApiClient {
     return service
   }
 
+  /**
+   * For big downloads (job artifacts): no overall deadline, since a large archive on a slow
+   * connection can take minutes. The read timeout still ends a stalled transfer. Not cached.
+   */
+  fun createDownloadService(instance: GitLabInstance): GitLabApiService =
+    buildService(normalizeBaseUrl(instance.url), instance.token, instance.authKind, download = true)
+
   fun forget(instanceId: String) {
     services.remove(instanceId)
   }
 
-  private fun buildService(baseUrl: String, token: String, authKind: String): GitLabApiService {
+  private fun buildService(baseUrl: String, token: String, authKind: String, download: Boolean = false): GitLabApiService {
     val authInterceptor = Interceptor { chain ->
       val request = chain.request().newBuilder()
         .header("User-Agent", "GitLabMobile/1.0 (Android)")
-        .header("Accept", "application/json")
+        .header("Accept", if (download) "*/*" else "application/json")
         .apply { applyToken(token, authKind) }
         .build()
       chain.proceed(request)
@@ -80,6 +87,7 @@ object GitLabApiClient {
 
     val client = (clientOverride ?: baseHttpClient).newBuilder()
       .addInterceptor(authInterceptor)
+      .apply { if (download) callTimeout(0, TimeUnit.MILLISECONDS) }
       .build()
 
     return Retrofit.Builder()
