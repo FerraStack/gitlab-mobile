@@ -102,6 +102,14 @@ class InstanceStore(context: Context) {
     prefs.edit().putString(KEY_OAUTH_CLIENT_ID, clientId.trim()).apply()
   }
 
+  /** Removes every saved account and the key that encrypts them; see [AndroidKeyStoreSecretStore.reset]. */
+  @Synchronized
+  fun resetAll() {
+    prefs.edit().clear().commit()
+    secretStore.reset()
+    cache = null
+  }
+
   @Synchronized
   fun deleteInstance(instanceId: String) {
     val remaining = getInstances().filter { it.id != instanceId }

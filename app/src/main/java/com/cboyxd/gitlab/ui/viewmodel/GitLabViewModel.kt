@@ -149,6 +149,14 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     bootstrap()
   }
 
+  /** Recovery when saved accounts can't be decrypted: forget them and start as a guest. */
+  fun resetSavedAccounts() {
+    viewModelScope.launch {
+      runStorage { store.resetAll() }
+      retryBootstrap()
+    }
+  }
+
   // -------------------------------------------------------------------------------------------
   // Navigation
   // -------------------------------------------------------------------------------------------
