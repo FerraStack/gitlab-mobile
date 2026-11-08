@@ -14,6 +14,7 @@ import com.cboyxd.gitlab.data.model.GitLabApprovals
 import com.cboyxd.gitlab.data.model.GitLabBranch
 import com.cboyxd.gitlab.data.model.GitLabCommit
 import com.cboyxd.gitlab.data.model.GitLabContributor
+import com.cboyxd.gitlab.data.model.GitLabDiscussion
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabLabel
