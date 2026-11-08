@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LocalOffer
 import androidx.compose.material.icons.outlined.NewReleases
 import androidx.compose.material.icons.outlined.People
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -118,7 +119,16 @@ fun ProjectSectionScreen(
   onSetIssueState: (String) -> Unit = {},
   onSetMergeRequestState: (String) -> Unit = {},
   onLoadMore: (ProjectSection) -> Unit = {},
+  onRunPipeline: (ref: String, onResult: (String?) -> Unit) -> Unit = { _, _ -> },
 ) {
+  var runningPipeline by rememberSaveable { mutableStateOf(false) }
+  if (runningPipeline) {
+    RunPipelineDialog(
+      defaultRef = state.effectiveRef.orEmpty(),
+      onRun = onRunPipeline,
+      onDismiss = { runningPipeline = false },
+    )
+  }
   val retry = { onRetry(section) }
   var creating by rememberSaveable(state.projectId) { mutableStateOf(false) }
   if (creating && state.project.data != null) {
@@ -133,6 +143,14 @@ fun ProjectSectionScreen(
     GlTopBar(title = section.title, overline = state.project.data?.nameWithNamespace, onBack = onBack) {
       if (section == ProjectSection.MERGE_REQUESTS && canWrite && state.project.data != null) {
         com.cboyxd.gitlab.ui.components.GlIconAction(Icons.Outlined.Add, "New merge request", onClick = { creating = true })
+      }
+      if (section == ProjectSection.PIPELINES && canWrite && state.project.data != null) {
+        com.cboyxd.gitlab.ui.components.GlIconAction(
+          Icons.Outlined.PlayArrow,
+          "Run pipeline",
+          onClick = { runningPipeline = true },
+          modifier = Modifier.testTag("run_pipeline"),
+        )
       }
     }
     when (section) {

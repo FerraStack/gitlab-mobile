@@ -552,6 +552,12 @@ private fun Destination(
       onOpenRelease = viewModel.code::openRelease,
       onNavigate = viewModel::navigateTo,
       onOpenInBrowser = browser,
+      onRunPipeline = { ref, done ->
+        viewModel.ci.runPipeline(project.projectId, ref) { error ->
+          if (error == null) viewModel.code.retrySection(ProjectSection.PIPELINES)
+          done(error)
+        }
+      },
       onSetIssueState = viewModel.code::setIssueState,
       onSetMergeRequestState = viewModel.code::setMergeRequestState,
       onLoadMore = viewModel.code::loadMore,

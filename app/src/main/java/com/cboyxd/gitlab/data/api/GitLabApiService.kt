@@ -332,6 +332,13 @@ interface GitLabApiService {
     @Path("mr_iid") mrIid: Long
   ): Response<MergeRequestChangesResponse>
 
+  /** Starts a new pipeline for [ref] (a branch or tag). */
+  @POST("api/v4/projects/{id}/pipeline")
+  suspend fun createPipeline(
+    @Path("id") projectId: Long,
+    @Query("ref") ref: String,
+  ): Response<GitLabPipeline>
+
   @GET("api/v4/projects/{id}/pipelines")
   suspend fun getProjectPipelines(
     @Path("id") projectId: Long,
