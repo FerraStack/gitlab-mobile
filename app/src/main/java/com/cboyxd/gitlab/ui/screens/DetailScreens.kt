@@ -442,6 +442,8 @@ fun MergeRequestDetailScreen(
       onInfo = { showInfo = true },
       onBack = onBack,
       modifier = modifier,
+      currentUsername = currentUsername,
+      onSetApproved = onSetApproved,
     )
     MrPage.FILES -> FilesChangedPage(state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier)
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
@@ -539,6 +541,8 @@ private fun MergeRequestOverview(
   onInfo: () -> Unit,
   onBack: () -> Unit,
   modifier: Modifier,
+  currentUsername: String? = null,
+  onSetApproved: (Boolean) -> Unit = {},
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
