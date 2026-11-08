@@ -159,6 +159,33 @@ class ReviewFeature internal constructor(
     }
   }
 
+  /** Approves ([approve] true) or revokes the user's approval, then refreshes approvals and mergeability. */
+  fun setApproved(approve: Boolean) {
+    val mr = detail.mergeRequest.data ?: return
+    if (detail.busy) return
+    apply(mr.projectId, mr.iid) { it.copy(busy = true) }
+    val repo = host.repository
+    host.session.launch {
+      val result = host.api { if (approve) repo.approveMergeRequest(it, mr).map { } else repo.unapproveMergeRequest(it, mr) }
+      result.onFailure { error ->
+        apply(mr.projectId, mr.iid) { it.copy(busy = false) }
+        host.notifyError(error.userMessage())
+        return@launch
+      }
+      val approvals = host.api { repo.getMergeRequestApprovals(it, mr.projectId, mr.iid) }
+      val refreshed = host.api { repo.getMergeRequest(it, mr.projectId, mr.iid) }
+      apply(mr.projectId, mr.iid) { d ->
+        val known = d.mergeRequest.data?.labelDetails.orEmpty()
+        d.copy(
+          busy = false,
+          approvals = d.approvals.settle(approvals),
+          mergeRequest = refreshed.getOrNull()?.let { d.mergeRequest.success(it.copy(labelDetails = it.labelDetails.ifEmpty { known })) } ?: d.mergeRequest,
+        )
+      }
+      host.notify(if (approve) "Approved !${mr.iid}" else "Approval revoked")
+    }
+  }
+
   private fun replace(updated: GitLabMergeRequest) {
     host.state.update { s ->
       fun List<GitLabMergeRequest>.swap() = map { if (it.projectId == updated.projectId && it.iid == updated.iid) updated else it }

@@ -452,6 +452,21 @@ interface GitLabApiService {
     @Path("mr_iid") mrIid: Long
   ): Response<GitLabApprovals>
 
+  /** Approves; with [sha], only if the source branch is still at the reviewed commit. */
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/approve")
+  suspend fun approveMergeRequest(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Field("sha") sha: String? = null,
+  ): Response<GitLabApprovals>
+
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/unapprove")
+  suspend fun unapproveMergeRequest(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+  ): Response<ResponseBody>
+
   // ---- Pipelines and jobs ----
 
   @GET("api/v4/projects/{id}/pipelines/{pipeline_id}")

@@ -687,6 +687,26 @@ class GitLabRepository {
   }
 
   /** Approval state, or null when the server has no approvals API for this request (CE, anonymous). */
+  /** Approves the reviewed commit of [mr]. */
+  suspend fun approveMergeRequest(instance: GitLabInstance, mr: GitLabMergeRequest): Result<GitLabApprovals> = call {
+    requireToken(instance)
+    val response = service(instance).approveMergeRequest(mr.projectId, mr.iid, sha = mr.sha?.takeIf { it.isNotBlank() })
+    when (response.code()) {
+      401, 403 -> throw GitLabApiException(response.code(), "You can't approve this merge request. Authors and people without the right role often can't.")
+      409 -> throw GitLabApiException(409, "The source branch changed since you opened this merge request. Refresh it and review the new commits first.")
+    }
+    response.requireBody()
+  }
+
+  suspend fun unapproveMergeRequest(instance: GitLabInstance, mr: GitLabMergeRequest): Result<Unit> = call {
+    requireToken(instance)
+    val response = service(instance).unapproveMergeRequest(mr.projectId, mr.iid)
+    // 404: there was no approval of ours to revoke; the result is the same.
+    if (!response.isSuccessful && response.code() != 404) throw response.toGitLabException()
+    response.body()?.close()
+    response.errorBody()?.close()
+  }
+
   suspend fun getMergeRequestApprovals(instance: GitLabInstance, projectId: Long, iid: Long): Result<GitLabApprovals?> = call {
     val response = service(instance).getMergeRequestApprovals(projectId, iid)
     if (response.code() == 401 || response.code() == 403 || response.code() == 404) return@call null

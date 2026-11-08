@@ -373,4 +373,31 @@ class GitLabRepositoryTest {
 
     assertEquals(mapOf("opened" to 4012, "closed" to 988, "all" to 5000), counts)
   }
+
+  @Test
+  fun `approving pins the reviewed commit`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"approved":true,"approved_by":[{"user":{"id":1,"username":"tanuki"}}]}"""))
+    val mr = GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "Fix launch", sha = "abc123")
+
+    val approvals = repository.approveMergeRequest(instance, mr).getOrThrow()
+
+    assertEquals("tanuki", approvals.approvedBy.single().user.username)
+    val request = server.takeRequest()
+    assertEquals("/api/v4/projects/1/merge_requests/12/approve", request.path)
+    assertTrue(request.body.readUtf8().contains("sha=abc123"))
+  }
+
+  @Test
+  fun `approval refusals explain themselves`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(401).setBody("""{"message":"401 Unauthorized"}"""))
+    val error = repository.approveMergeRequest(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "t")).exceptionOrNull()
+    assertTrue(error is GitLabApiException && error.message!!.contains("can't approve"))
+  }
+
+  @Test
+  fun `revoking an approval that isn't there is fine`() = runBlocking {
+    server.enqueue(MockResponse().setResponseCode(404))
+    assertTrue(repository.unapproveMergeRequest(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "t")).isSuccess)
+    assertEquals("/api/v4/projects/1/merge_requests/12/unapprove", server.takeRequest().path)
+  }
 }

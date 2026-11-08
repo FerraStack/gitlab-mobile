@@ -56,6 +56,7 @@ import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.CallMerge
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
@@ -408,6 +409,9 @@ fun MergeRequestDetailScreen(
   onOpenInBrowser: (String) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  /** The signed-in user, to tell whether they already approved. */
+  currentUsername: String? = null,
+  onSetApproved: (Boolean) -> Unit = {},
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
@@ -438,6 +442,8 @@ fun MergeRequestDetailScreen(
       onInfo = { showInfo = true },
       onBack = onBack,
       modifier = modifier,
+      currentUsername = currentUsername,
+      onSetApproved = onSetApproved,
     )
     MrPage.FILES -> FilesChangedPage(state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier)
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
@@ -535,6 +541,8 @@ private fun MergeRequestOverview(
   onInfo: () -> Unit,
   onBack: () -> Unit,
   modifier: Modifier,
+  currentUsername: String? = null,
+  onSetApproved: (Boolean) -> Unit = {},
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
@@ -632,6 +640,8 @@ private fun MergeRequestOverview(
                 onSetClosed = onSetClosed,
                 onOpenPipeline = onOpenPipeline,
                 onOpenUser = onOpenUser,
+                currentUsername = currentUsername,
+                onSetApproved = onSetApproved,
               )
             }
 
@@ -736,6 +746,8 @@ private fun StatusRows(
   onSetClosed: (Boolean) -> Unit,
   onOpenPipeline: (GitLabPipeline) -> Unit,
   onOpenUser: (GitLabUser) -> Unit,
+  currentUsername: String? = null,
+  onSetApproved: (Boolean) -> Unit = {},
 ) {
   val c = Gl.colors
   var reviewsOpen by rememberSaveable { mutableStateOf(false) }
@@ -761,6 +773,20 @@ private fun StatusRows(
       Column(Modifier.fillMaxWidth().background(c.bg).padding(start = 56.dp, end = GlSpace.margin, bottom = 12.dp)) {
         MetaRowCompact("Reviewers") { if (mr.reviewers.isEmpty()) MetaValue("None requested") else PeopleList(mr.reviewers, onOpenUser) }
         MetaRowCompact("Approved by") { if (approvers.isEmpty()) MetaValue("No one yet") else PeopleList(approvers, onOpenUser) }
+      }
+    }
+    // Approvals load separately; the button waits for them so it never offers the wrong action.
+    if (canWrite && mr.state == "opened" && state.approvals.loaded && state.approvals.data != null) {
+      val approvedByMe = currentUsername != null && approvers.any { it.username.equals(currentUsername, ignoreCase = true) }
+      Row(Modifier.fillMaxWidth().background(c.bg).padding(start = 56.dp, end = GlSpace.margin, bottom = 12.dp)) {
+        GlButton(
+          text = if (approvedByMe) "Revoke approval" else "Approve",
+          onClick = { onSetApproved(!approvedByMe) },
+          kind = GlButtonKind.Secondary,
+          icon = if (approvedByMe) Icons.Outlined.Close else Icons.Outlined.Check,
+          loading = state.busy,
+          modifier = Modifier.testTag(if (approvedByMe) "revoke_approval" else "approve"),
+        )
       }
     }
     mr.headPipeline?.let { pipeline ->
