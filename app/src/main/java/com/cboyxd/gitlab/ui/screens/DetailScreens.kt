@@ -743,6 +743,7 @@ private fun StatusRows(
   Column {
     val reviewSummary = when {
       approvers.isNotEmpty() -> "Approved by ${approvers.joinToString { it.name.ifBlank { it.username } }}"
+      state.approvals.initialLoading -> "Checking approvals…"
       (approvals?.approvalsLeft ?: 0) > 0 -> plural(approvals!!.approvalsLeft!!, "approval required", "approvals required")
       mr.reviewers.isNotEmpty() -> plural(mr.reviewers.size, "reviewer", "reviewers")
       else -> "None requested"

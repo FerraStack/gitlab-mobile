@@ -62,8 +62,10 @@ class ReviewFeature internal constructor(
       launch { val r = host.api { repo.getMergeRequestDiffs(it, projectId, iid) }; apply(projectId, iid) { it.copy(diffs = it.diffs.settle(r)) } }
       launch {
         val r = host.api { repo.getMergeRequestDiscussions(it, projectId, iid) }
+        // Show the threads now; their diff previews need a compare request per revision pair.
+        apply(projectId, iid) { it.copy(discussions = it.discussions.settle(r), notes = it.notes.settle(r.map { threads -> threads.flatMap { d -> d.notes }.distinctBy { n -> n.id } })) }
         val previews = r.getOrNull()?.let { threads -> host.api { Result.success(repo.getDiscussionDiffs(it, projectId, threads)) }.getOrDefault(emptyMap()) }.orEmpty()
-        apply(projectId, iid) { it.copy(discussions = it.discussions.settle(r), discussionDiffs = previews, notes = it.notes.settle(r.map { threads -> threads.flatMap { d -> d.notes }.distinctBy { n -> n.id } })) }
+        if (previews.isNotEmpty()) apply(projectId, iid) { it.copy(discussionDiffs = previews) }
       }
       launch { val r = host.api { repo.getMergeRequestCommits(it, projectId, iid) }; apply(projectId, iid) { it.copy(commits = it.commits.settle(r)) } }
       launch { val r = host.api { repo.getMergeRequestPipelines(it, projectId, iid) }; apply(projectId, iid) { it.copy(pipelines = it.pipelines.settle(r)) } }
