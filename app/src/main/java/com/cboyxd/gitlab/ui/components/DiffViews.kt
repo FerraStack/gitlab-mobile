@@ -41,6 +41,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -53,6 +55,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.cboyxd.gitlab.data.model.DiffLineAnchor
+import com.cboyxd.gitlab.data.model.GitLabDiscussion
 import com.cboyxd.gitlab.data.model.GitLabFileDiff
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlColors
@@ -222,6 +226,52 @@ internal fun diffCodeWidth(longestLine: Int, fontSizeSp: Float, fontScale: Float
 }
 
 /** Width of the line-number gutter for numbers up to [maxLine]. */
+/** Where a comment on this line goes in [diff]; null for hunk headers. */
+fun DiffLine.anchorIn(diff: GitLabFileDiff): DiffLineAnchor? = when (kind) {
+  DiffKind.Hunk -> null
+  DiffKind.Add -> DiffLineAnchor(diff.oldPath, diff.newPath, oldLine = null, newLine = newNo)
+  DiffKind.Remove -> DiffLineAnchor(diff.oldPath, diff.newPath, oldLine = oldNo, newLine = null)
+  DiffKind.Context -> DiffLineAnchor(diff.oldPath, diff.newPath, oldLine = oldNo, newLine = newNo)
+}
+
+/**
+ * Line [newNo] of the new version exactly as the diff has it. The parsed text has tabs expanded
+ * for display, which a suggestion must not copy into the code.
+ */
+fun rawNewLine(diff: String, newNo: Int): String? {
+  var next = 0
+  var inHunk = false
+  for (line in diff.lineSequence()) {
+    when {
+      line.startsWith("@@") -> {
+        inHunk = true
+        next = HUNK.matchEntire(line)?.groupValues?.get(2)?.toInt() ?: next
+      }
+      !inHunk || line.isEmpty() || line.startsWith("\\") || line.startsWith("-") -> Unit
+      else -> {
+        if (next == newNo) return line.drop(1)
+        next++
+      }
+    }
+  }
+  return null
+}
+
+/** Identifies a line across the diff and thread positions: the new side when it has one. */
+fun diffLineKey(oldPath: String, newPath: String, oldLine: Int?, newLine: Int?): String? = when {
+  newLine != null -> "new:$newPath:$newLine"
+  oldLine != null -> "old:$oldPath:$oldLine"
+  else -> null
+}
+
+/** Lines that have threads on [headSha], the version the page shows (older versions' line numbers differ). */
+fun commentedLines(discussions: List<GitLabDiscussion>, headSha: String?): Set<String> =
+  discussions.mapNotNullTo(HashSet()) { d ->
+    d.notes.firstNotNullOfOrNull { it.position }
+      ?.takeIf { headSha != null && it.headSha == headSha }
+      ?.let { diffLineKey(it.oldPath, it.newPath, it.oldLine, it.newLine) }
+  }
+
 fun diffGutterWidth(maxLine: Int): Dp = (maxLine.toString().length.coerceAtLeast(2) * 8 + 16).dp
 
 /**
@@ -231,6 +281,10 @@ fun diffGutterWidth(maxLine: Int): Dp = (maxLine.toString().length.coerceAtLeast
 fun DiffLineRow(
   line: DiffLine, text: AnnotatedString?, gutter: Dp, modifier: Modifier = Modifier,
   scrollState: ScrollState? = null, codeWidth: Dp = 0.dp,
+  /** Has a thread; drawn as an accent bar at the start of the line. */
+  commented: Boolean = false,
+  /** Starts a comment on this line; null when commenting isn't possible here. */
+  onClick: (() -> Unit)? = null,
 ) {
   val c = Gl.colors
   val options = LocalDiffDisplayOptions.current
@@ -252,9 +306,16 @@ fun DiffLineRow(
     DiffKind.Remove -> c.diffRemoveBg to "−"
     else -> Color.Transparent to " "
   }
+  val markColor = c.accent
   Row(
     modifier = modifier
       .fillMaxWidth()
+      .then(if (onClick != null) Modifier.clickable(onClickLabel = "Comment on this line", onClick = onClick) else Modifier)
+      // Drawn over the line (not behind it), or the add/remove background below would cover it.
+      .drawWithContent {
+        drawContent()
+        if (commented) drawRect(markColor, size = Size(4.dp.toPx(), size.height))
+      }
       .then(if (scrollState != null) Modifier.horizontalScroll(scrollState).width(codeWidth) else Modifier)
       .height(IntrinsicSize.Min)
       .background(bg)
@@ -263,7 +324,7 @@ fun DiffLineRow(
           DiffKind.Add -> "Added line ${line.newNo}: ${line.text}"
           DiffKind.Remove -> "Removed line ${line.oldNo}: ${line.text}"
           else -> "Line ${line.newNo}: ${line.text}"
-        }
+        } + if (commented) ". Has comments" else ""
       },
   ) {
     val numbers = when {
@@ -391,6 +452,10 @@ fun LazyListScope.diffFileItems(
   onToggleViewed: ((Int) -> Unit)?,
   wrapLines: Boolean = true,
   selectedFile: Int? = null,
+  /** Keys from [diffLineKey] of lines that have threads. */
+  commented: Set<String> = emptySet(),
+  /** Tapping a line starts a comment on it; null keeps lines inert. */
+  onLineClick: ((file: Int, line: DiffLine) -> Unit)? = null,
 ) {
   diffs.forEachIndexed { index, diff ->
     if (selectedFile != null && selectedFile != index) return@forEachIndexed
@@ -436,7 +501,12 @@ fun LazyListScope.diffFileItems(
             val gutters = gutter * (if (!options.showLineNumbers) 0 else if (options.dualLineNumbers) 2 else 1)
             diffCodeWidth(maxColumns, options.fontSize.toFloat(), fontScale, gutters, screenWidth)
           }
-          DiffLineRow(lines[n], texts?.getOrNull(n), gutter, scrollState = scroll, codeWidth = width)
+          val line = lines[n]
+          DiffLineRow(
+            line, texts?.getOrNull(n), gutter, scrollState = scroll, codeWidth = width,
+            commented = commented.isNotEmpty() && diffLineKey(diff.oldPath, diff.newPath, line.oldNo, line.newNo) in commented,
+            onClick = if (onLineClick != null && line.kind != DiffKind.Hunk) ({ onLineClick(index, line) }) else null,
+          )
         }
       }
     }

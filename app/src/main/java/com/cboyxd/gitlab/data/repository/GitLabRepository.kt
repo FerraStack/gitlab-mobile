@@ -15,6 +15,9 @@ import com.cboyxd.gitlab.data.model.GitLabBranch
 import com.cboyxd.gitlab.data.model.GitLabCommit
 import com.cboyxd.gitlab.data.model.GitLabContributor
 import com.cboyxd.gitlab.data.model.GitLabDiscussion
+import com.cboyxd.gitlab.data.model.GitLabDiffRefs
+import com.cboyxd.gitlab.data.model.DiffLineAnchor
+import com.cboyxd.gitlab.data.model.diffNotePosition
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabLabel
@@ -707,6 +710,21 @@ class GitLabRepository {
     requireToken(instance)
     if (body.isBlank()) throw GitLabApiException(400, "Write a reply first.")
     service(instance).replyToMergeRequestDiscussion(projectId, iid, discussionId, body).requireBody().withDisplayTimes()
+  }
+
+  /** Starts a thread on one diff line of the version [refs] names. */
+  suspend fun createDiffNote(
+    instance: GitLabInstance, projectId: Long, iid: Long, refs: GitLabDiffRefs, anchor: DiffLineAnchor, body: String,
+  ): Result<GitLabDiscussion> = call {
+    requireToken(instance)
+    if (body.isBlank()) throw GitLabApiException(400, "Write a comment first.")
+    val response = service(instance).createMergeRequestDiscussion(projectId, iid, body, diffNotePosition(refs, anchor))
+    when (response.code()) {
+      // GitLab rejects a position that no longer matches the changes, e.g. after a new push.
+      400 -> throw GitLabApiException(400, "GitLab couldn't place a comment on that line. The changes may have been updated; refresh and try again.")
+      403 -> throw GitLabApiException(403, "You can't comment on this merge request.")
+    }
+    response.requireBody().let { d -> d.copy(notes = d.notes.map { it.withDisplayTimes() }) }
   }
 
   suspend fun resolveDiscussion(instance: GitLabInstance, projectId: Long, iid: Long, discussionId: String, resolved: Boolean): Result<GitLabDiscussion> = call {

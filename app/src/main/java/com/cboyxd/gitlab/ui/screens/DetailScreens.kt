@@ -114,6 +114,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cboyxd.gitlab.data.model.DiffLineAnchor
+import com.cboyxd.gitlab.data.model.GitLabFileDiff
+import com.cboyxd.gitlab.ui.components.DiffKind
+import com.cboyxd.gitlab.ui.components.DiffLine
+import com.cboyxd.gitlab.ui.components.anchorIn
+import com.cboyxd.gitlab.ui.components.commentedLines
+import com.cboyxd.gitlab.ui.components.ellipsizeStart
+import com.cboyxd.gitlab.ui.components.rawNewLine
+import androidx.compose.material.icons.outlined.EditNote
 import com.cboyxd.gitlab.data.model.GitLabCommit
 import com.cboyxd.gitlab.data.model.GitLabDiscussion
 import com.cboyxd.gitlab.data.model.resolvable
@@ -423,6 +432,8 @@ fun MergeRequestDetailScreen(
   onCancelAutoMerge: () -> Unit = {},
   onMarkReady: () -> Unit = {},
   onRebase: () -> Unit = {},
+  /** Starts a thread on a diff line; the callback gets null on success or the error message. */
+  onCommentOnLine: (anchor: DiffLineAnchor, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
@@ -462,7 +473,13 @@ fun MergeRequestDetailScreen(
       onMarkReady = onMarkReady,
       onRebase = onRebase,
     )
-    MrPage.FILES -> FilesChangedPage(state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier)
+    MrPage.FILES -> FilesChangedPage(
+      state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier,
+      // Comments are anchored to the version in diff_refs, which only the full merge request has.
+      canComment = canWrite && mr?.diffRefs != null,
+      previewContext = context,
+      onCommentOnLine = onCommentOnLine,
+    )
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
       loadableList(
         feed = state.commits,
@@ -1043,9 +1060,17 @@ private fun MergeButton(label: String, onClick: () -> Unit, modifier: Modifier =
 
 /** Every changed file with sticky headers, a gutter and red/green lines. */
 @Composable
-private fun FilesChangedPage(state: MergeRequestDetailState, reference: String, onRetry: () -> Unit, onOpenInBrowser: (String) -> Unit, onBack: () -> Unit, modifier: Modifier) {
+private fun FilesChangedPage(
+  state: MergeRequestDetailState, reference: String, onRetry: () -> Unit, onOpenInBrowser: (String) -> Unit, onBack: () -> Unit, modifier: Modifier,
+  canComment: Boolean = false,
+  previewContext: MarkdownContext? = null,
+  onCommentOnLine: (DiffLineAnchor, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+) {
   val c = Gl.colors
   val diffs = state.diffs
+  var commentingOn by remember(diffs.data) { mutableStateOf<Pair<Int, DiffLine>?>(null) }
+  val headSha = state.mergeRequest.data?.diffRefs?.headSha
+  val commented = remember(state.discussions.data, headSha) { commentedLines(state.discussions.data, headSha) }
   val stats = remember(diffs.data) { diffStats(diffs.data) }
   val prepared = rememberPreparedDiffs(diffs.data)
   var collapsedPaths by rememberSaveable(state.projectId, state.iid) { mutableStateOf(emptyList<String>()) }
@@ -1090,6 +1115,8 @@ private fun FilesChangedPage(state: MergeRequestDetailState, reference: String, 
               viewed = viewed,
               wrapLines = options.wrapLines,
               selectedFile = selectedFile,
+              commented = commented,
+              onLineClick = if (canComment) ({ file, line -> commentingOn = file to line }) else null,
               onToggleCollapsed = { i -> val key = path(i); collapsedPaths = if (key in collapsedPaths) collapsedPaths - key else collapsedPaths + key },
               onToggleViewed = { i ->
                 val key = path(i)
@@ -1106,6 +1133,22 @@ private fun FilesChangedPage(state: MergeRequestDetailState, reference: String, 
           }
         }
       }
+    }
+  }
+  commentingOn?.let { (file, line) ->
+    val diff = diffs.data.getOrNull(file)
+    val anchor = diff?.let { line.anchorIn(it) }
+    if (diff != null && anchor != null && previewContext != null) {
+      CommentSheet(
+        posting = state.posting,
+        previewContext = previewContext,
+        onDismiss = { commentingOn = null },
+        onSubmit = { body, done -> onCommentOnLine(anchor, body, done) },
+        title = "Comment on line",
+        quote = { DiffLineQuote(diff, line) },
+        // GitLab applies suggestions to the new version, so removed lines can't have one.
+        suggestion = line.newNo?.let { rawNewLine(diff.diff, it) },
+      )
     }
   }
   if (showingOptions) {
@@ -1699,6 +1742,10 @@ private fun CommentSheet(
   onDismiss: () -> Unit,
   onSubmit: (String, (String?) -> Unit) -> Unit,
   title: String = "Comment",
+  /** What the comment is about, shown above the editor. */
+  quote: (@Composable () -> Unit)? = null,
+  /** The line's current text: offers "Suggest a change" that starts a suggestion with it. */
+  suggestion: String? = null,
 ) {
   val c = Gl.colors
   var draft by remember { mutableStateOf(TextFieldValue("")) }
@@ -1719,6 +1766,7 @@ private fun CommentSheet(
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Text(title, style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      quote?.invoke()
       MarkdownEditor(
         value = draft,
         onValueChange = { draft = it; emptyError = false },
@@ -1731,6 +1779,16 @@ private fun CommentSheet(
         previewContext = previewContext,
       )
       error?.let { InlineError(it) }
+      if (suggestion != null && !draft.text.contains("```suggestion")) {
+        GlButton(
+          text = "Suggest a change",
+          onClick = { draft = withSuggestion(draft, suggestion) },
+          kind = GlButtonKind.Ghost,
+          icon = Icons.Outlined.EditNote,
+          enabled = !posting,
+          modifier = Modifier.testTag("suggest_change"),
+        )
+      }
       GlButton(
         text = title,
         loading = posting,
@@ -1864,3 +1922,37 @@ private fun MergeOption(label: String, checked: Boolean, onChange: (Boolean) -> 
 internal fun mergeWaitsForPipeline(mr: GitLabMergeRequest): Boolean =
   mr.headPipeline?.status in setOf("running", "pending", "created", "preparing", "waiting_for_resource") ||
     mr.detailedMergeStatus == "ci_still_running"
+
+/** Adds a GitLab suggestion block for [line] after the draft, with the cursor inside it to edit. */
+internal fun withSuggestion(draft: TextFieldValue, line: String): TextFieldValue {
+  val before = draft.text.trimEnd().let { if (it.isEmpty()) "" else "$it\n\n" }
+  val opening = "$before```suggestion:-0+0\n"
+  val text = "$opening$line\n```\n"
+  return TextFieldValue(text, selection = androidx.compose.ui.text.TextRange(opening.length, opening.length + line.length))
+}
+
+/** The line a comment is about: file and line number, then the code on its add/remove color. */
+@Composable
+private fun DiffLineQuote(diff: GitLabFileDiff, line: DiffLine) {
+  val c = Gl.colors
+  val (path, number, bg) = when (line.kind) {
+    DiffKind.Remove -> Triple(diff.oldPath, "Removed line ${line.oldNo}", c.diffRemoveBg)
+    DiffKind.Add -> Triple(diff.newPath, "Added line ${line.newNo}", c.diffAddBg)
+    else -> Triple(diff.newPath, "Line ${line.newNo}", c.sunken)
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Text("${ellipsizeStart(path, 48)} · $number", style = Gl.type.meta, color = c.textSecondary)
+    Text(
+      text = line.text.ifBlank { " " },
+      style = Gl.type.mono,
+      color = c.textPrimary,
+      maxLines = 3,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(6.dp))
+        .background(bg)
+        .padding(horizontal = 10.dp, vertical = 8.dp),
+    )
+  }
+}

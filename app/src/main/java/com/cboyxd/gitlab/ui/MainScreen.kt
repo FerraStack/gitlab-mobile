@@ -601,6 +601,7 @@ private fun Destination(
       onLink = onLink,
       onRetry = viewModel.review::retry,
       onMerge = viewModel.review::merge,
+      onCommentOnLine = viewModel.review::commentOnLine,
       onSetClosed = viewModel.review::setClosed,
       onComment = viewModel.review::postNote,
       onReply = viewModel.review::reply,

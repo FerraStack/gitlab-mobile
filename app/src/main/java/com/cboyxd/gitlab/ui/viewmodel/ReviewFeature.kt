@@ -188,6 +188,36 @@ class ReviewFeature internal constructor(
     }
   }
 
+  /**
+   * Starts a thread on one line of the changes. The comment is anchored to the version the page
+   * shows ([GitLabMergeRequest.diffRefs]); [onResult] gets null on success or the error message.
+   */
+  fun commentOnLine(anchor: com.cboyxd.gitlab.data.model.DiffLineAnchor, body: String, onResult: (String?) -> Unit) {
+    val d = detail
+    val mr = d.mergeRequest.data ?: return
+    if (d.posting) return
+    val refs = mr.diffRefs ?: return onResult("The merge request is still loading. Try again in a moment.")
+    apply(mr.projectId, mr.iid) { it.copy(posting = true) }
+    host.session.launch {
+      host.api { host.repository.createDiffNote(it, mr.projectId, mr.iid, refs, anchor, body) }.fold(
+        onSuccess = { thread ->
+          apply(mr.projectId, mr.iid) { s ->
+            s.copy(
+              posting = false,
+              notes = s.notes.copy(data = s.notes.data + thread.notes),
+              discussions = s.discussions.copy(data = s.discussions.data + thread),
+            )
+          }
+          onResult(null)
+        },
+        onFailure = { error ->
+          apply(mr.projectId, mr.iid) { it.copy(posting = false) }
+          onResult(error.userMessage())
+        },
+      )
+    }
+  }
+
   /** Replies in thread [discussionId]; [onResult] gets null on success or the error message. */
   fun reply(discussionId: String, body: String, onResult: (String?) -> Unit) {
     val d = detail
