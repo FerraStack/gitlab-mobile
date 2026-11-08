@@ -618,6 +618,7 @@ private fun Destination(
       onOpenJob = { viewModel.ci.openJob(uiState.pipelineDetail.projectId, it.id) },
       onOpenCommit = { viewModel.code.openCommit(uiState.pipelineDetail.projectId, it) },
       onOpenInBrowser = browser,
+      onPlayJob = { viewModel.ci.playJob(uiState.pipelineDetail.projectId, it.id) },
     )
     is ScreenDestination.JobDetail -> JobDetailScreen(
       state = uiState.jobDetail,
@@ -626,6 +627,8 @@ private fun Destination(
       onRetryLoad = viewModel.ci::retryLoadJob,
       onRetryJob = viewModel.ci::retryJob,
       onOpenInBrowser = browser,
+      onPlayJob = { viewModel.ci.playJob(uiState.jobDetail.projectId, uiState.jobDetail.jobId) },
+      onCancelJob = viewModel.ci::cancelJob,
     )
   }
 }

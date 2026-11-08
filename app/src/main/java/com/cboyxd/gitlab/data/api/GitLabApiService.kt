@@ -532,6 +532,19 @@ interface GitLabApiService {
     @Path("job_id") jobId: Long
   ): Response<GitLabJob>
 
+  /** Starts a manual job. */
+  @POST("api/v4/projects/{id}/jobs/{job_id}/play")
+  suspend fun playJob(
+    @Path("id") projectId: Long,
+    @Path("job_id") jobId: Long,
+  ): Response<GitLabJob>
+
+  @POST("api/v4/projects/{id}/jobs/{job_id}/cancel")
+  suspend fun cancelJob(
+    @Path("id") projectId: Long,
+    @Path("job_id") jobId: Long,
+  ): Response<GitLabJob>
+
   // ---- People, groups, search, activity ----
 
   @GET("api/v4/users/{id}")
