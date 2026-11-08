@@ -169,9 +169,9 @@ fun ProjectSectionScreen(
             IssueRow(issue = issue, onClick = { onOpenIssue(issue) }, labels = labels)
             GlDivider()
           }
-          if (state.issuesNextPage != null) item(key = "more") {
-            LoadMoreRow(loading = state.loadingMore, onClick = { onLoadMore(ProjectSection.ISSUES) })
-          }
+          state.issuesNextPage?.let { page -> item(key = "more") {
+            LoadMoreRow(page = page, loading = state.loadingMore, failed = state.loadMoreFailed, onLoad = { onLoadMore(ProjectSection.ISSUES) })
+          } }
         }
       }
       ProjectSection.MERGE_REQUESTS -> {
@@ -198,9 +198,9 @@ fun ProjectSectionScreen(
             MergeRequestRow(mr = mr, onClick = { onOpenMergeRequest(mr) }, labels = labels)
             GlDivider()
           }
-          if (state.mergeRequestsNextPage != null) item(key = "more") {
-            LoadMoreRow(loading = state.loadingMore, onClick = { onLoadMore(ProjectSection.MERGE_REQUESTS) })
-          }
+          state.mergeRequestsNextPage?.let { page -> item(key = "more") {
+            LoadMoreRow(page = page, loading = state.loadingMore, failed = state.loadMoreFailed, onLoad = { onLoadMore(ProjectSection.MERGE_REQUESTS) })
+          } }
         }
       }
       ProjectSection.PIPELINES -> Feed(
@@ -340,16 +340,27 @@ private fun <T> Feed(
   }
 }
 
-/** Last row of a paged list: loads the next page. */
+/**
+ * Last row of a paged list. Scrolling it into view loads [page], so long lists simply continue.
+ * After a failure it waits for a tap ("Try again") rather than retrying on every scroll; the
+ * button also stays for anyone who prefers to ask.
+ */
 @Composable
-private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
+private fun LoadMoreRow(page: Int, loading: Boolean, failed: Boolean, onLoad: () -> Unit) {
+  val load by androidx.compose.runtime.rememberUpdatedState(onLoad)
+  // Keyed on the page: when a short page leaves this row on screen, the next one follows.
+  androidx.compose.runtime.LaunchedEffect(page, failed) { if (!failed) load() }
   androidx.compose.foundation.layout.Box(
     modifier = Modifier.fillMaxWidth().padding(GlSpace.margin),
     contentAlignment = Alignment.Center,
   ) {
     com.cboyxd.gitlab.ui.components.GlButton(
-      text = if (loading) "Loading…" else "Load more",
-      onClick = onClick,
+      text = when {
+        loading -> "Loading…"
+        failed -> "Try again"
+        else -> "Load more"
+      },
+      onClick = onLoad,
       kind = com.cboyxd.gitlab.ui.components.GlButtonKind.Secondary,
       loading = loading,
       modifier = Modifier.testTag("load_more"),
