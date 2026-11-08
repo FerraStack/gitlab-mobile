@@ -133,6 +133,65 @@ class ReviewFeature internal constructor(
     }
   }
 
+  /** Replies in thread [discussionId]; [onResult] gets null on success or the error message. */
+  fun reply(discussionId: String, body: String, onResult: (String?) -> Unit) {
+    val d = detail
+    val mr = d.mergeRequest.data ?: return
+    if (d.posting) return
+    apply(mr.projectId, mr.iid) { it.copy(posting = true) }
+    host.session.launch {
+      host.api { host.repository.replyToDiscussion(it, mr.projectId, mr.iid, discussionId, body) }.fold(
+        onSuccess = { note ->
+          apply(mr.projectId, mr.iid) { s ->
+            s.copy(
+              posting = false,
+              notes = s.notes.copy(data = s.notes.data + note),
+              discussions = s.discussions.copy(data = s.discussions.data.map { t ->
+                if (t.id == discussionId) t.copy(individualNote = false, notes = t.notes + note) else t
+              }),
+            )
+          }
+          onResult(null)
+        },
+        onFailure = { error ->
+          apply(mr.projectId, mr.iid) { it.copy(posting = false) }
+          onResult(error.userMessage())
+        },
+      )
+    }
+  }
+
+  /** Resolves or reopens a thread, then refreshes mergeability ("Unresolved threads" may clear). */
+  fun setResolved(discussionId: String, resolved: Boolean) {
+    val mr = detail.mergeRequest.data ?: return
+    if (discussionId in detail.resolvingThreads) return
+    apply(mr.projectId, mr.iid) { it.copy(resolvingThreads = it.resolvingThreads + discussionId) }
+    val repo = host.repository
+    host.session.launch {
+      val result = host.api { repo.resolveDiscussion(it, mr.projectId, mr.iid, discussionId, resolved) }
+      apply(mr.projectId, mr.iid) { s ->
+        val updated = result.getOrNull()
+        s.copy(
+          resolvingThreads = s.resolvingThreads - discussionId,
+          discussions = if (updated == null) s.discussions else s.discussions.copy(data = s.discussions.data.map { t ->
+            // Keep our display-formatted notes; take the resolved flags from GitLab's answer.
+            if (t.id != discussionId) t else t.copy(notes = t.notes.map { n -> updated.notes.firstOrNull { it.id == n.id }?.let { u -> n.copy(resolved = u.resolved) } ?: n })
+          }),
+        )
+      }
+      result.exceptionOrNull()?.let {
+        host.notifyError(it.userMessage())
+        return@launch
+      }
+      host.api { repo.getMergeRequest(it, mr.projectId, mr.iid) }.getOrNull()?.let { fresh ->
+        apply(mr.projectId, mr.iid) { d ->
+          val known = d.mergeRequest.data?.labelDetails.orEmpty()
+          d.copy(mergeRequest = d.mergeRequest.success(fresh.copy(labelDetails = fresh.labelDetails.ifEmpty { known })))
+        }
+      }
+    }
+  }
+
   suspend fun branches(projectId: Long, search: String): Result<List<com.cboyxd.gitlab.data.model.GitLabBranch>> =
     host.api { host.repository.getBranches(it, projectId, search) }
 

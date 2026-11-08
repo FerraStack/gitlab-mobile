@@ -400,4 +400,25 @@ class GitLabRepositoryTest {
     assertTrue(repository.unapproveMergeRequest(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "t")).isSuccess)
     assertEquals("/api/v4/projects/1/merge_requests/12/unapprove", server.takeRequest().path)
   }
+
+  @Test
+  fun `replies go to their thread`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"id":9,"body":"Done"}"""))
+    val note = repository.replyToDiscussion(instance, 1, 12, "abc123", "Done").getOrThrow()
+    assertEquals(9L, note.id)
+    val request = server.takeRequest()
+    assertEquals("/api/v4/projects/1/merge_requests/12/discussions/abc123/notes", request.path)
+    assertEquals("body=Done", request.body.readUtf8())
+  }
+
+  @Test
+  fun `threads are resolved and reopened`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json")
+      .setBody("""{"id":"abc123","notes":[{"id":5,"resolvable":true,"resolved":true}]}"""))
+    val thread = repository.resolveDiscussion(instance, 1, 12, "abc123", resolved = true).getOrThrow()
+    assertEquals(true, thread.notes.single().resolved)
+    val request = server.takeRequest()
+    assertEquals("PUT", request.method)
+    assertEquals("/api/v4/projects/1/merge_requests/12/discussions/abc123?resolved=true", request.path)
+  }
 }
