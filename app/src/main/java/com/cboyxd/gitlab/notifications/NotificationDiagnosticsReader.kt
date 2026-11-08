@@ -47,6 +47,8 @@ object NotificationDiagnosticsReader {
       scheduled = scheduled(app),
       accounts = NotificationDiagnostics.accountStatuses(accounts, history),
       history = history,
+      instantEnabled = InstantSettings(app).enabled,
+      instantRunning = InstantNotificationService.isRunning,
     )
   }
 

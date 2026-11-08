@@ -4,20 +4,35 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Separate histories, so frequent checks don't push rare ones out of the log. */
+enum class PollBucket(val key: String, val limit: Int) {
+  BACKGROUND("runs:background", 50),
+  INSTANT("runs:instant", 40),
+  APP("runs:app", 20),
+}
+
 /** What started a notification check. */
-enum class PollTrigger(val label: String, val background: Boolean) {
+enum class PollTrigger(val label: String, val bucket: PollBucket) {
   /** WorkManager's 15-minute periodic work, which Android may defer for hours. */
-  PERIODIC("Background", true),
+  PERIODIC("Background", PollBucket.BACKGROUND),
   /** One-off work queued when accounts change. */
-  ONE_TIME("After account change", true),
+  ONE_TIME("After account change", PollBucket.BACKGROUND),
+  /** The instant notifications service. */
+  INSTANT("Instant", PollBucket.INSTANT),
   /** The loop that runs while the app is on screen. */
-  APP_OPEN("App open", false),
+  APP_OPEN("App open", PollBucket.APP),
   /** "Check now" in diagnostics. */
-  MANUAL("Check now", false),
+  MANUAL("Check now", PollBucket.APP),
+  ;
+
+  /** WorkManager checks: the cadence Android allows without instant notifications. */
+  val background: Boolean get() = bucket == PollBucket.BACKGROUND
 }
 
 enum class PollOutcome(val label: String) {
   OK("OK"),
+  /** A light check found no new to-dos or counts, so nothing else was fetched. */
+  UNCHANGED("No changes"),
   /** Some accounts or feeds failed, others were read. */
   PARTIAL("Partly failed"),
   FAILED("Failed"),
@@ -56,25 +71,23 @@ data class PollRun(
 
 /**
  * The last notification checks, kept on the device so diagnostics can show how often Android
- * really runs them. Background and in-app checks are kept apart: the in-app loop runs every
- * minute and would otherwise push the background history out within an hour.
+ * really runs them. Each [PollBucket] is kept apart: the in-app loop and instant notifications
+ * run every minute or two and would otherwise push the background history out within an hour.
  */
 class PollLog internal constructor(private val prefs: android.content.SharedPreferences) {
   constructor(context: Context) : this(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
 
   @Synchronized
   fun record(run: PollRun) {
-    val key = keyFor(run.trigger)
-    val runs = decode(prefs.getString(key, null)) + run
-    val limit = if (run.trigger.background) BACKGROUND_LIMIT else APP_LIMIT
-    prefs.edit().putString(key, encode(runs.takeLast(limit))).apply()
+    val bucket = run.trigger.bucket
+    val runs = decode(prefs.getString(bucket.key, null)) + run
+    prefs.edit().putString(bucket.key, encode(runs.takeLast(bucket.limit))).apply()
   }
 
   /** All recorded runs, newest first. */
   @Synchronized
   fun runs(): List<PollRun> =
-    (decode(prefs.getString(KEY_BACKGROUND, null)) + decode(prefs.getString(KEY_APP, null)))
-      .sortedByDescending { it.startedAt }
+    PollBucket.entries.flatMap { decode(prefs.getString(it.key, null)) }.sortedByDescending { it.startedAt }
 
   @Synchronized
   fun clear() {
@@ -82,13 +95,9 @@ class PollLog internal constructor(private val prefs: android.content.SharedPref
   }
 
   companion object {
-    const val BACKGROUND_LIMIT = 50
-    const val APP_LIMIT = 20
+    val BACKGROUND_LIMIT = PollBucket.BACKGROUND.limit
+    val APP_LIMIT = PollBucket.APP.limit
     private const val PREFS = "gitlab_notification_diagnostics"
-    private const val KEY_BACKGROUND = "runs:background"
-    private const val KEY_APP = "runs:app"
-
-    private fun keyFor(trigger: PollTrigger) = if (trigger.background) KEY_BACKGROUND else KEY_APP
 
     internal fun encode(runs: List<PollRun>): String = JSONArray().apply {
       runs.forEach { run ->

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.CheckCircleOutline
@@ -23,6 +24,7 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,12 +38,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.cboyxd.gitlab.notifications.DataSaver
 import com.cboyxd.gitlab.notifications.Finding
 import com.cboyxd.gitlab.notifications.GitLabNotificationMonitor
+import com.cboyxd.gitlab.notifications.InstantNotificationService
+import com.cboyxd.gitlab.notifications.InstantSettings
 import com.cboyxd.gitlab.notifications.NotificationDiagnostics
 import com.cboyxd.gitlab.notifications.NotificationDiagnosticsReader
 import com.cboyxd.gitlab.notifications.PollOutcome
@@ -53,6 +58,7 @@ import com.cboyxd.gitlab.ui.components.GlButton
 import com.cboyxd.gitlab.ui.components.GlButtonKind
 import com.cboyxd.gitlab.ui.components.GlCard
 import com.cboyxd.gitlab.ui.components.GlDivider
+import com.cboyxd.gitlab.ui.components.GlFilterRow
 import com.cboyxd.gitlab.ui.components.GlRow
 import com.cboyxd.gitlab.ui.components.GlSectionHeader
 import com.cboyxd.gitlab.ui.components.GlTopBar
@@ -84,12 +90,29 @@ internal fun openSystemNotificationSettings(context: Context) {
 @Composable
 fun NotificationSettingsRoute(onBack: () -> Unit, onOpenDiagnostics: () -> Unit) {
   val context = LocalContext.current
-  val (diagnostics, _) = rememberDiagnostics(context)
+  val (diagnostics, reload) = rememberDiagnostics(context)
+  val settings = remember { InstantSettings(context.applicationContext) }
+  var instant by remember { mutableStateOf(settings.enabled) }
+  var interval by remember { mutableIntStateOf(settings.intervalSeconds) }
   NotificationSettingsScreen(
     diagnostics = diagnostics,
     onBack = onBack,
     onOpenSystemSettings = { openSystemNotificationSettings(context) },
     onOpenDiagnostics = onOpenDiagnostics,
+    instantEnabled = instant,
+    intervalSeconds = interval,
+    onSetInstant = {
+      settings.enabled = it
+      instant = it
+      InstantNotificationService.sync(context)
+      reload()
+    },
+    onSetInterval = {
+      settings.intervalSeconds = it
+      interval = it
+      // The running service reads the interval on its next round; wake it so that's now.
+      InstantNotificationService.sync(context)
+    },
   )
 }
 
@@ -125,10 +148,52 @@ fun NotificationSettingsScreen(
   onOpenSystemSettings: () -> Unit,
   onOpenDiagnostics: () -> Unit,
   modifier: Modifier = Modifier,
+  instantEnabled: Boolean = false,
+  intervalSeconds: Int = InstantSettings.DEFAULT_INTERVAL,
+  onSetInstant: (Boolean) -> Unit = {},
+  onSetInterval: (Int) -> Unit = {},
 ) {
   Column(modifier = modifier.fillMaxSize().background(Gl.colors.bg)) {
     GlTopBar(title = "Notifications", onBack = onBack)
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = GlSpace.group)) {
+      item(key = "instant") {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = instantEnabled, role = Role.Switch, onValueChange = onSetInstant)
+            .padding(horizontal = GlSpace.margin, vertical = 12.dp)
+            .testTag("instant_toggle"),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text("Instant notifications", style = Gl.type.rowTitle, color = Gl.colors.textPrimary)
+            Text(
+              "Checks every $intervalSeconds s while the screen is on, and every 5–15 minutes while it's off. " +
+                "Shows a silent notification while it runs and uses more battery.",
+              style = Gl.type.meta,
+              color = Gl.colors.textSecondary,
+            )
+          }
+          Spacer(Modifier.width(GlSpace.margin))
+          Switch(checked = instantEnabled, onCheckedChange = null)
+        }
+        if (instantEnabled) {
+          Text(
+            "Check every",
+            style = Gl.type.label,
+            color = Gl.colors.textSecondary,
+            modifier = Modifier.padding(start = GlSpace.margin, top = 4.dp),
+          )
+          GlFilterRow(
+            options = InstantSettings.INTERVAL_CHOICES,
+            selected = intervalSeconds,
+            label = { "$it s" },
+            onSelect = onSetInterval,
+            modifier = Modifier.padding(bottom = GlSpace.tight),
+          )
+        }
+        GlDivider()
+      }
       item(key = "summary") {
         val problems = diagnostics?.findings().orEmpty().filter { it.severity != Severity.OK }
         GlRow(
@@ -158,7 +223,8 @@ fun NotificationSettingsScreen(
           text = "GitLab has no push service for other apps, so GitLab Mobile checks your to-dos and merge requests " +
             "itself: every minute while the app is open, and about every 15 minutes in the background when Android " +
             "allows it. Battery optimization, the standby bucket and the phone maker's battery manager can delay " +
-            "background checks by hours. Diagnostics shows what applies to this phone.",
+            "background checks by hours. Instant notifications keep checking with a foreground service instead. " +
+            "Diagnostics shows what applies to this phone.",
           style = Gl.type.bodySmall,
           color = Gl.colors.textSecondary,
           modifier = Modifier.padding(horizontal = GlSpace.margin),
@@ -222,6 +288,15 @@ fun NotificationDiagnosticsScreen(
           },
         )
         d.scheduled?.stopReason?.let { ValueRow("Last stopped by Android", it) }
+        ValueRow(
+          "Instant notifications",
+          when {
+            !d.instantEnabled -> "Off"
+            !d.instantRunning -> "On, not running"
+            else -> d.instantRuns.firstOrNull()?.let { "Running, checked ${formatDuration(d.now - it.startedAt)} ago" } ?: "Running"
+          },
+          bad = d.instantEnabled && !d.instantRunning,
+        )
       }
       if (d.accounts.isNotEmpty()) item(key = "accounts") {
         GlSectionHeader(title = "Accounts")
@@ -318,7 +393,7 @@ private fun ValueRow(label: String, value: String, bad: Boolean = false) {
 private fun HistoryRow(run: PollRun, now: Long) {
   val time = remember(run.startedAt) { SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(run.startedAt)) }
   val severity = when (run.outcome) {
-    PollOutcome.OK, PollOutcome.NO_ACCOUNTS -> Severity.OK
+    PollOutcome.OK, PollOutcome.UNCHANGED, PollOutcome.NO_ACCOUNTS -> Severity.OK
     PollOutcome.BUSY, PollOutcome.PARTIAL -> Severity.WARNING
     PollOutcome.FAILED -> Severity.PROBLEM
   }

@@ -28,6 +28,7 @@ import retrofit2.Response
 import retrofit2.http.Field
 import retrofit2.http.FormUrlEncoded
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
@@ -537,6 +538,10 @@ interface GitLabApiService {
     @Query("scope") scope: String = "merge_requests",
     @Query("per_page") perPage: Int = 30
   ): Response<List<GitLabMergeRequest>>
+
+  /** Counts of the user's to-dos and merge requests; cheap enough to ask every minute. */
+  @GET("api/v4/user_counts")
+  suspend fun getUserCounts(@Header("If-None-Match") etag: String? = null): Response<ResponseBody>
 
   @GET("api/v4/todos")
   suspend fun getTodos(

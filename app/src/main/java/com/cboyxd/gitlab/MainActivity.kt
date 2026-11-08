@@ -9,6 +9,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.cboyxd.gitlab.notifications.GitLabNotifications
 import com.cboyxd.gitlab.notifications.GitLabNotificationMonitor
+import com.cboyxd.gitlab.notifications.InstantNotificationService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -48,6 +49,8 @@ class MainActivity : ComponentActivity() {
           viewModel.uiState.map { it.savedInstances.filter { account -> account.token.isNotBlank() }.map { account -> account.id }.sorted() }
             .distinctUntilChanged().collect { accounts ->
               GitLabNotifications.schedule(this@MainActivity, accounts.isNotEmpty())
+              // Starts (or restarts, after Android stopped it) the opt-in instant service.
+              InstantNotificationService.sync(this@MainActivity)
               requestNotificationPermission(accounts.isNotEmpty())
             }
         }
@@ -55,7 +58,8 @@ class MainActivity : ComponentActivity() {
           viewModel.uiState.first { it.bootstrapped }
           while (true) {
             try {
-              GitLabNotificationMonitor.poll(this@MainActivity)
+              // The instant service already checks every minute or two, more cheaply.
+              if (!InstantNotificationService.isRunning) GitLabNotificationMonitor.poll(this@MainActivity)
               viewModel.refreshNotificationInbox()
             } catch (cancel: CancellationException) {
               throw cancel

@@ -68,7 +68,11 @@ data class NotificationDiagnostics(
   val accounts: List<AccountStatus>,
   /** Newest first. */
   val history: List<PollRun>,
+  val instantEnabled: Boolean = false,
+  val instantRunning: Boolean = false,
 ) {
+  val instantRuns: List<PollRun> get() = history.filter { it.trigger == PollTrigger.INSTANT }
+
   val backgroundRuns: List<PollRun> get() = history.filter { it.trigger.background }
 
   /** Median time between background checks in the history, or null with fewer than 3 checks. */
@@ -118,6 +122,9 @@ data class NotificationDiagnostics(
     }
     if (powerSaveMode) {
       add(Finding(Severity.WARNING, "Battery Saver is on", "Android defers background work more aggressively."))
+    }
+    if (instantEnabled && !instantRunning) {
+      add(Finding(Severity.PROBLEM, "Instant notifications aren't running", "Android stopped the service. Opening the app starts it again."))
     }
     if (scheduled == null || scheduled.state in setOf("CANCELLED", "FAILED")) {
       add(Finding(Severity.PROBLEM, "No background check is scheduled", "Open the app once to schedule it again."))

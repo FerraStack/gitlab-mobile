@@ -80,6 +80,13 @@ jobs:
             app/build/outputs/roborazzi/
           if-no-files-found: ignore
           retention-days: 14
+      - name: Save the device test APK for the emulator job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-test-apk-${{ github.run_id }}-${{ github.run_attempt }}
+          path: app/build/outputs/apk/androidTest/debug/*.apk
+          if-no-files-found: error
+          retention-days: 3
       - name: Save installable debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

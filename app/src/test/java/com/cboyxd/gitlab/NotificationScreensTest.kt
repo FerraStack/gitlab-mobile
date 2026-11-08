@@ -101,17 +101,30 @@ class NotificationScreensTest {
   )
 
   @Composable
-  private fun SettingsScreen() = NotificationSettingsScreen(
+  private fun SettingsScreen(instant: Boolean = false, onSetInstant: (Boolean) -> Unit = {}) = NotificationSettingsScreen(
     diagnostics = latePhone(),
     onBack = {},
     onOpenSystemSettings = {},
     onOpenDiagnostics = {},
+    instantEnabled = instant,
+    intervalSeconds = 90,
+    onSetInstant = onSetInstant,
   )
 
   @Test fun diagnostics_light() = capture("notification_diagnostics", dark = false) { Diagnostics() }
   @Test fun diagnostics_dark() = capture("notification_diagnostics", dark = true) { Diagnostics() }
   @Test fun settings_light() = capture("notification_settings", dark = false) { SettingsScreen() }
   @Test fun settings_dark() = capture("notification_settings", dark = true) { SettingsScreen() }
+  @Test fun settings_instant_light() = capture("notification_settings_instant", dark = false) { SettingsScreen(instant = true) }
+  @Test fun settings_instant_dark() = capture("notification_settings_instant", dark = true) { SettingsScreen(instant = true) }
+
+  @Test
+  fun `the instant switch reports the new value`() {
+    val values = mutableListOf<Boolean>()
+    rule.setContent { GitLabTheme(darkTheme = true, reducedMotion = true) { SettingsScreen(onSetInstant = { values += it }) } }
+    rule.onNodeWithTag("instant_toggle").performClick()
+    assertEquals(listOf(true), values)
+  }
 
   @Test
   fun `diagnostics explain the delay and check on demand`() {
