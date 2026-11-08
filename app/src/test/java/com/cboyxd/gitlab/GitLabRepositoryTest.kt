@@ -279,7 +279,7 @@ class GitLabRepositoryTest {
       )
     )
 
-    val issue = repository.getProjectIssues(instance, 3).getOrThrow().single()
+    val issue = repository.getProjectIssues(instance, 3).getOrThrow().items.single()
 
     assertEquals(listOf("bug"), issue.labels)
     assertEquals("#dc143c", issue.labelDetails.single().color)
@@ -321,5 +321,56 @@ class GitLabRepositoryTest {
     server.enqueue(MockResponse().setBody("""{"id":1,"iid":12,"project_id":1,"title":"Fix launch","state":"merged"}""").addHeader("Content-Type", "application/json"))
     repository.mergeMergeRequest(instance, GitLabMergeRequest(id = 1, iid = 12, projectId = 1, title = "Fix launch")).getOrThrow()
     assertTrue(!server.takeRequest().body.readUtf8().contains("sha="))
+  }
+
+  @Test
+  fun `project lists ask the server for one state and one page`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").addHeader("X-Next-Page", "3")
+      .setBody("""[{"id":1,"iid":2,"project_id":3,"title":"t","state":"closed"}]"""))
+
+    val page = repository.getProjectIssues(instance, 3, state = "closed", page = 2).getOrThrow()
+
+    assertEquals(3, page.nextPage)
+    assertEquals(1, page.items.size)
+    val url = server.takeRequest().requestUrl!!
+    assertEquals("closed", url.queryParameter("state"))
+    assertEquals("2", url.queryParameter("page"))
+  }
+
+  @Test
+  fun `the last page has no next page`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("[]"))
+    assertEquals(null, repository.getProjectMergeRequests(instance, 3, state = "merged").getOrThrow().nextPage)
+    assertEquals("merged", server.takeRequest().requestUrl!!.queryParameter("state"))
+  }
+
+  @Test
+  fun `merge request counts come per state from X-Total`() = runBlocking {
+    server.dispatcher = object : Dispatcher() {
+      override fun dispatch(request: RecordedRequest): MockResponse {
+        val total = when (request.requestUrl!!.queryParameter("state")) {
+          "opened" -> "4012"
+          "merged" -> "18000"
+          "closed" -> "77"
+          else -> null // GitLab leaves X-Total out for very large results.
+        }
+        return MockResponse().addHeader("Content-Type", "application/json").setBody("[]")
+          .apply { if (total != null) addHeader("X-Total", total) }
+      }
+    }
+
+    val counts = repository.getProjectMergeRequestStateCounts(instance, 3).getOrThrow()
+
+    assertEquals(mapOf("opened" to 4012, "merged" to 18000, "closed" to 77), counts)
+  }
+
+  @Test
+  fun `issue counts come from issue statistics`() = runBlocking {
+    server.enqueue(MockResponse().addHeader("Content-Type", "application/json")
+      .setBody("""{"statistics":{"counts":{"all":5000,"opened":4012,"closed":988}}}"""))
+
+    val counts = repository.getProjectIssueStateCounts(instance, 3).getOrThrow()
+
+    assertEquals(mapOf("opened" to 4012, "closed" to 988, "all" to 5000), counts)
   }
 }

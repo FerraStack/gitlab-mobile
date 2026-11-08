@@ -549,6 +549,9 @@ private fun Destination(
       onOpenRelease = viewModel.code::openRelease,
       onNavigate = viewModel::navigateTo,
       onOpenInBrowser = browser,
+      onSetIssueState = viewModel.code::setIssueState,
+      onSetMergeRequestState = viewModel.code::setMergeRequestState,
+      onLoadMore = viewModel.code::loadMore,
     )
     is ScreenDestination.ReleaseDetail -> ReleaseDetailScreen(
       state = project,

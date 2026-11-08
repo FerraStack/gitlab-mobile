@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
@@ -87,8 +88,11 @@ import com.cboyxd.gitlab.ui.viewmodel.ProjectDetailState
 import com.cboyxd.gitlab.ui.viewmodel.ProjectSection
 import com.cboyxd.gitlab.ui.viewmodel.ScreenDestination
 
-private enum class SectionIssueFilter(val label: String) { OPEN("Open"), CLOSED("Closed"), ALL("All") }
-private enum class SectionMrFilter(val label: String) { OPEN("Open"), MERGED("Merged"), CLOSED("Closed"), ALL("All") }
+/** [state] is GitLab's API value; the server filters, so counts and lists cover the whole project. */
+private enum class SectionIssueFilter(val label: String, val state: String) { OPEN("Open", "opened"), CLOSED("Closed", "closed"), ALL("All", "all") }
+private enum class SectionMrFilter(val label: String, val state: String) {
+  OPEN("Open", "opened"), MERGED("Merged", "merged"), CLOSED("Closed", "closed"), ALL("All", "all"),
+}
 
 /** One of a project's lists: issues, merge requests, pipelines, commits, refs, releases, people, activity. */
 @Composable
@@ -111,6 +115,9 @@ fun ProjectSectionScreen(
   onNavigate: (ScreenDestination) -> Unit,
   @Suppress("UNUSED_PARAMETER") onOpenInBrowser: (String) -> Unit,
   modifier: Modifier = Modifier,
+  onSetIssueState: (String) -> Unit = {},
+  onSetMergeRequestState: (String) -> Unit = {},
+  onLoadMore: (ProjectSection) -> Unit = {},
 ) {
   val retry = { onRetry(section) }
   var creating by rememberSaveable(state.projectId) { mutableStateOf(false) }
@@ -130,20 +137,19 @@ fun ProjectSectionScreen(
     }
     when (section) {
       ProjectSection.ISSUES -> {
-        var filter by rememberSaveable { mutableStateOf(SectionIssueFilter.OPEN) }
-        val all = state.issues.data
+        val filter = SectionIssueFilter.entries.firstOrNull { it.state == state.issueState } ?: SectionIssueFilter.OPEN
         ListsFilterBar {
           ListsDropdownFilter(
             name = "State",
             options = SectionIssueFilter.entries.toList(),
             selected = filter,
             label = { it.label },
-            onSelect = { filter = it },
-            countOf = { countIssues(all, it) },
+            onSelect = { onSetIssueState(it.state) },
+            countOf = { state.issueCounts[it.state] },
           )
         }
         GlDivider()
-        val visible = all.filter { matchesIssue(it, filter) }
+        val visible = state.issues.data
         Feed(
           feed = state.issues,
           visibleEmpty = visible.isEmpty(),
@@ -154,23 +160,25 @@ fun ProjectSectionScreen(
             IssueRow(issue = issue, onClick = { onOpenIssue(issue) }, labels = labels)
             GlDivider()
           }
+          if (state.issuesNextPage != null) item(key = "more") {
+            LoadMoreRow(loading = state.loadingMore, onClick = { onLoadMore(ProjectSection.ISSUES) })
+          }
         }
       }
       ProjectSection.MERGE_REQUESTS -> {
-        var filter by rememberSaveable { mutableStateOf(SectionMrFilter.OPEN) }
-        val all = state.mergeRequests.data
+        val filter = SectionMrFilter.entries.firstOrNull { it.state == state.mergeRequestState } ?: SectionMrFilter.OPEN
         ListsFilterBar {
           ListsDropdownFilter(
             name = "State",
             options = SectionMrFilter.entries.toList(),
             selected = filter,
             label = { it.label },
-            onSelect = { filter = it },
-            countOf = { f -> all.count { matchesMr(it, f) } },
+            onSelect = { onSetMergeRequestState(it.state) },
+            countOf = { state.mergeRequestCounts[it.state] },
           )
         }
         GlDivider()
-        val visible = all.filter { matchesMr(it, filter) }
+        val visible = state.mergeRequests.data
         Feed(
           feed = state.mergeRequests,
           visibleEmpty = visible.isEmpty(),
@@ -180,6 +188,9 @@ fun ProjectSectionScreen(
           items(visible, key = { "${it.projectId}-${it.iid}" }) { mr ->
             MergeRequestRow(mr = mr, onClick = { onOpenMergeRequest(mr) }, labels = labels)
             GlDivider()
+          }
+          if (state.mergeRequestsNextPage != null) item(key = "more") {
+            LoadMoreRow(loading = state.loadingMore, onClick = { onLoadMore(ProjectSection.MERGE_REQUESTS) })
           }
         }
       }
@@ -320,19 +331,21 @@ private fun <T> Feed(
   }
 }
 
-private fun matchesIssue(issue: GitLabIssue, filter: SectionIssueFilter) = when (filter) {
-  SectionIssueFilter.OPEN -> issue.state == "opened"
-  SectionIssueFilter.CLOSED -> issue.state == "closed"
-  SectionIssueFilter.ALL -> true
-}
-
-private fun countIssues(all: List<GitLabIssue>, filter: SectionIssueFilter) = all.count { matchesIssue(it, filter) }
-
-private fun matchesMr(mr: GitLabMergeRequest, filter: SectionMrFilter) = when (filter) {
-  SectionMrFilter.OPEN -> mr.state == "opened"
-  SectionMrFilter.MERGED -> mr.state == "merged"
-  SectionMrFilter.CLOSED -> mr.state == "closed"
-  SectionMrFilter.ALL -> true
+/** Last row of a paged list: loads the next page. */
+@Composable
+private fun LoadMoreRow(loading: Boolean, onClick: () -> Unit) {
+  androidx.compose.foundation.layout.Box(
+    modifier = Modifier.fillMaxWidth().padding(GlSpace.margin),
+    contentAlignment = Alignment.Center,
+  ) {
+    com.cboyxd.gitlab.ui.components.GlButton(
+      text = if (loading) "Loading…" else "Load more",
+      onClick = onClick,
+      kind = com.cboyxd.gitlab.ui.components.GlButtonKind.Secondary,
+      loading = loading,
+      modifier = Modifier.testTag("load_more"),
+    )
+  }
 }
 
 /** Branch as GitHub lists them: the name as a blue monospace chip, its badges, then the last commit. */

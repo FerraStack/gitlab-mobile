@@ -17,11 +17,13 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
   private var fileJob: Job? = null
   private var commitJob: Job? = null
   private val labelJobs = mutableMapOf<Long, Job>()
+  private var stateCountsJob: Job? = null
+  private var moreJob: Job? = null
 
   private val detail get() = host.state.value.project
 
   internal fun reset() {
-    listOf(projectJob, readmeJob, languagesJob, countsJob, treeJob, fileJob, commitJob, refSearchJob).forEach { it?.cancel() }
+    listOf(projectJob, readmeJob, languagesJob, countsJob, treeJob, fileJob, commitJob, refSearchJob, stateCountsJob, moreJob).forEach { it?.cancel() }
     sectionJobs.values.forEach { it.cancel() }
     sectionJobs.clear()
     labelJobs.values.forEach { it.cancel() }
@@ -163,6 +165,81 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
 
   fun retrySection(section: ProjectSection) = loadSection(section, force = true)
 
+  /** Shows the project's issues in [state] ("opened", "closed", "all"), asking the server for them. */
+  fun setIssueState(state: String) {
+    val id = detail.project.data?.id ?: return
+    if (detail.issueState == state) return
+    moreJob?.cancel()
+    host.state.update { s -> s.withProject(id) { it.copy(issueState = state, issues = emptyFeed(), issuesNextPage = null, loadingMore = false) } }
+    loadSection(ProjectSection.ISSUES, force = true)
+  }
+
+  /** Shows the project's merge requests in [state] ("opened", "merged", "closed", "all"). */
+  fun setMergeRequestState(state: String) {
+    val id = detail.project.data?.id ?: return
+    if (detail.mergeRequestState == state) return
+    moreJob?.cancel()
+    host.state.update { s -> s.withProject(id) { it.copy(mergeRequestState = state, mergeRequests = emptyFeed(), mergeRequestsNextPage = null, loadingMore = false) } }
+    loadSection(ProjectSection.MERGE_REQUESTS, force = true)
+  }
+
+  /** Appends the next page of issues or merge requests. */
+  fun loadMore(section: ProjectSection) {
+    val d = detail
+    val id = d.project.data?.id ?: return
+    if (d.loadingMore) return
+    val repo = host.repository
+    when (section) {
+      ProjectSection.ISSUES -> {
+        val page = d.issuesNextPage ?: return
+        val state = d.issueState
+        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true) } }
+        moreJob = host.session.launch {
+          val result = host.api { repo.getProjectIssues(it, id, state, page) }
+          host.state.update { s ->
+            s.withProject(id) { p ->
+              val next = result.getOrNull()
+              when {
+                p.issueState != state -> p.copy(loadingMore = false)
+                next == null -> p.copy(loadingMore = false)
+                else -> p.copy(
+                  issues = p.issues.success((p.issues.data + next.items).distinctBy { "${it.projectId}-${it.iid}" }),
+                  issuesNextPage = next.nextPage,
+                  loadingMore = false,
+                )
+              }
+            }
+          }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+        }
+      }
+      ProjectSection.MERGE_REQUESTS -> {
+        val page = d.mergeRequestsNextPage ?: return
+        val state = d.mergeRequestState
+        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true) } }
+        moreJob = host.session.launch {
+          val result = host.api { repo.getProjectMergeRequests(it, id, state, page) }
+          host.state.update { s ->
+            s.withProject(id) { p ->
+              val next = result.getOrNull()
+              when {
+                p.mergeRequestState != state -> p.copy(loadingMore = false)
+                next == null -> p.copy(loadingMore = false)
+                else -> p.copy(
+                  mergeRequests = p.mergeRequests.success((p.mergeRequests.data + next.items).distinctBy { "${it.projectId}-${it.iid}" }),
+                  mergeRequestsNextPage = next.nextPage,
+                  loadingMore = false,
+                )
+              }
+            }
+          }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+        }
+      }
+      else -> Unit
+    }
+  }
+
   internal fun loadSection(section: ProjectSection, force: Boolean = false) {
     val d = detail
     val project = d.project.data ?: return
@@ -182,10 +259,32 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     if (!force && (feed.loaded || feed.loading)) return
     val repo = host.repository
     sectionJobs[section] = when (section) {
-      ProjectSection.ISSUES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(issues = it.issues.start()) } },
-        { repo.getProjectIssues(it, id) }, { s, r -> s.withProject(id) { it.copy(issues = it.issues.settle(r)) } })
-      ProjectSection.MERGE_REQUESTS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(mergeRequests = it.mergeRequests.start()) } },
-        { repo.getProjectMergeRequests(it, id) }, { s, r -> s.withProject(id) { it.copy(mergeRequests = it.mergeRequests.settle(r)) } })
+      ProjectSection.ISSUES -> {
+        val state = d.issueState
+        stateCountsJob = host.load(stateCountsJob, { it }, { repo.getProjectIssueStateCounts(it, id) },
+          { s, r -> s.withProject(id) { p -> r.getOrNull()?.let { p.copy(issueCounts = it) } ?: p } })
+        host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(issues = it.issues.start()) } },
+          { repo.getProjectIssues(it, id, state) },
+          { s, r ->
+            s.withProject(id) {
+              if (it.issueState != state) it
+              else it.copy(issues = it.issues.settle(r.map { page -> page.items }), issuesNextPage = r.getOrNull()?.nextPage)
+            }
+          })
+      }
+      ProjectSection.MERGE_REQUESTS -> {
+        val state = d.mergeRequestState
+        stateCountsJob = host.load(stateCountsJob, { it }, { repo.getProjectMergeRequestStateCounts(it, id) },
+          { s, r -> s.withProject(id) { p -> r.getOrNull()?.let { p.copy(mergeRequestCounts = it) } ?: p } })
+        host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(mergeRequests = it.mergeRequests.start()) } },
+          { repo.getProjectMergeRequests(it, id, state) },
+          { s, r ->
+            s.withProject(id) {
+              if (it.mergeRequestState != state) it
+              else it.copy(mergeRequests = it.mergeRequests.settle(r.map { page -> page.items }), mergeRequestsNextPage = r.getOrNull()?.nextPage)
+            }
+          })
+      }
       ProjectSection.PIPELINES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(pipelines = it.pipelines.start()) } },
         { instance -> repo.getPipelines(instance, id).map { list -> repo.attachJobs(instance, list, limit = 8) } },
         { s, r -> s.withProject(id) { it.copy(pipelines = it.pipelines.settle(r)) } })
