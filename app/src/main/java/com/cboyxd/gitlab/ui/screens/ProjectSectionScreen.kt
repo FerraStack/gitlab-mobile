@@ -122,13 +122,6 @@ fun ProjectSectionScreen(
   onRunPipeline: (ref: String, onResult: (String?) -> Unit) -> Unit = { _, _ -> },
 ) {
   var runningPipeline by rememberSaveable { mutableStateOf(false) }
-  if (runningPipeline) {
-    RunPipelineDialog(
-      defaultRef = state.effectiveRef.orEmpty(),
-      onRun = onRunPipeline,
-      onDismiss = { runningPipeline = false },
-    )
-  }
   val retry = { onRetry(section) }
   var creating by rememberSaveable(state.projectId) { mutableStateOf(false) }
   if (creating && state.project.data != null) {
@@ -212,7 +205,15 @@ fun ProjectSectionScreen(
           }
         }
       }
-      ProjectSection.PIPELINES -> Feed(
+      ProjectSection.PIPELINES -> Column {
+        if (runningPipeline) {
+          RunPipelinePanel(
+            defaultRef = state.effectiveRef.orEmpty(),
+            onRun = onRunPipeline,
+            onDismiss = { runningPipeline = false },
+          )
+        }
+        Feed(
         feed = state.pipelines,
         visibleEmpty = state.pipelines.data.isEmpty(),
         onRetry = retry,
@@ -226,6 +227,7 @@ fun ProjectSectionScreen(
           )
           GlDivider()
         }
+      }
       }
       ProjectSection.COMMITS -> {
         state.effectiveRef?.let { ref ->
