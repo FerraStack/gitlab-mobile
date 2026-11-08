@@ -33,6 +33,7 @@ import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 
 @JsonClass(generateAdapter = true)
 data class GitLabVersionResponse(
@@ -331,6 +332,8 @@ interface GitLabApiService {
     @Query("page") page: Int = 1
   ): Response<List<GitLabCommit>>
 
+  /** Streamed: the repository reads at most a few hundred KB of it. */
+  @Streaming
   @GET("api/v4/projects/{id}/repository/files/{file_path}/raw")
   suspend fun getRawFileContent(
     @Path("id") projectId: Long,
@@ -469,10 +472,16 @@ interface GitLabApiService {
     @Path("job_id") jobId: Long
   ): Response<GitLabJob>
 
+  /**
+   * Streamed, so a log of hundreds of MB is never held in memory. [range] asks for the tail
+   * (`bytes=-N`); servers that ignore it send the whole log, which the repository skims.
+   */
+  @Streaming
   @GET("api/v4/projects/{id}/jobs/{job_id}/trace")
   suspend fun getJobTrace(
     @Path("id") projectId: Long,
-    @Path("job_id") jobId: Long
+    @Path("job_id") jobId: Long,
+    @Header("Range") range: String? = null,
   ): Response<ResponseBody>
 
   @POST("api/v4/projects/{id}/jobs/{job_id}/retry")
