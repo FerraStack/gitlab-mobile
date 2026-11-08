@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccountTree
@@ -262,7 +263,10 @@ fun ProjectSectionScreen(
         onRetry = retry,
         empty = EmptyText(Icons.Outlined.People, "No contributors to show", "This server doesn't share contributor stats for this project."),
       ) {
-        items(state.contributors.data, key = { it.name + it.commits }) { person ->
+        // GitLab lists a person once per name and email, so names and commit counts repeat (one
+        // person with two emails; "Alice"/12 and "Alice1"/2 both concatenate to "Alice12").
+        // Duplicate keys crash a LazyColumn, so the position is part of the key.
+        itemsIndexed(state.contributors.data, key = { index, person -> "$index:${person.email}" }) { _, person ->
           ContributorRow(person)
           GlDivider(inset = 68.dp)
         }
