@@ -45,7 +45,7 @@ class JobActionsTest {
         state = PipelineDetailState(
           projectId = 1,
           pipelineId = 900,
-          pipeline = Loadable(GitLabPipeline(id = 900, projectId = 1, status = "running", ref = "main", sha = "abc1234def"), loaded = true),
+          pipeline = Loadable(GitLabPipeline(id = 900, projectId = 1, status = "running", ref = "main", sha = "abc1234def", createdAt = "2026-11-08T06:00:00Z"), loaded = true),
           jobs = Loadable(jobs, loaded = true),
         ),
         canWrite = canWrite,
@@ -64,7 +64,7 @@ class JobActionsTest {
   private fun showJob(job: GitLabJob, dark: Boolean = true) = rule.setContent {
     GitLabTheme(darkTheme = dark, reducedMotion = true) {
       JobDetailScreen(
-        state = JobDetailState(projectId = 1, jobId = job.id, job = Loadable(job, loaded = true), trace = Loadable(JobTrace("$ ./deploy.sh\\nWaiting for approval\\n", truncated = false), loaded = true)),
+        state = JobDetailState(projectId = 1, jobId = job.id, job = Loadable(job, loaded = true), trace = Loadable(JobTrace("\$ ./deploy.sh\nWaiting for approval\n", truncated = false), loaded = true)),
         canWrite = true,
         onBack = {},
         onRetryLoad = {},
