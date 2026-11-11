@@ -170,7 +170,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     val id = detail.project.data?.id ?: return
     if (detail.issueState == state) return
     moreJob?.cancel()
-    host.state.update { s -> s.withProject(id) { it.copy(issueState = state, issues = emptyFeed(), issuesNextPage = null, loadingMore = false) } }
+    host.state.update { s -> s.withProject(id) { it.copy(issueState = state, issues = emptyFeed(), issuesNextPage = null, loadingMore = false, loadMoreFailed = false) } }
     loadSection(ProjectSection.ISSUES, force = true)
   }
 
@@ -179,7 +179,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     val id = detail.project.data?.id ?: return
     if (detail.mergeRequestState == state) return
     moreJob?.cancel()
-    host.state.update { s -> s.withProject(id) { it.copy(mergeRequestState = state, mergeRequests = emptyFeed(), mergeRequestsNextPage = null, loadingMore = false) } }
+    host.state.update { s -> s.withProject(id) { it.copy(mergeRequestState = state, mergeRequests = emptyFeed(), mergeRequestsNextPage = null, loadingMore = false, loadMoreFailed = false) } }
     loadSection(ProjectSection.MERGE_REQUESTS, force = true)
   }
 
@@ -193,7 +193,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       ProjectSection.ISSUES -> {
         val page = d.issuesNextPage ?: return
         val state = d.issueState
-        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true) } }
+        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true, loadMoreFailed = false) } }
         moreJob = host.session.launch {
           val result = host.api { repo.getProjectIssues(it, id, state, page) }
           host.state.update { s ->
@@ -201,7 +201,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
               val next = result.getOrNull()
               when {
                 p.issueState != state -> p.copy(loadingMore = false)
-                next == null -> p.copy(loadingMore = false)
+                next == null -> p.copy(loadingMore = false, loadMoreFailed = true)
                 else -> p.copy(
                   issues = p.issues.success((p.issues.data + next.items).distinctBy { "${it.projectId}-${it.iid}" }),
                   issuesNextPage = next.nextPage,
@@ -216,7 +216,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       ProjectSection.MERGE_REQUESTS -> {
         val page = d.mergeRequestsNextPage ?: return
         val state = d.mergeRequestState
-        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true) } }
+        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true, loadMoreFailed = false) } }
         moreJob = host.session.launch {
           val result = host.api { repo.getProjectMergeRequests(it, id, state, page) }
           host.state.update { s ->
@@ -224,7 +224,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
               val next = result.getOrNull()
               when {
                 p.mergeRequestState != state -> p.copy(loadingMore = false)
-                next == null -> p.copy(loadingMore = false)
+                next == null -> p.copy(loadingMore = false, loadMoreFailed = true)
                 else -> p.copy(
                   mergeRequests = p.mergeRequests.success((p.mergeRequests.data + next.items).distinctBy { "${it.projectId}-${it.iid}" }),
                   mergeRequestsNextPage = next.nextPage,

@@ -164,6 +164,8 @@ data class ProjectDetailState(
   val mergeRequestCounts: Map<String, Int> = emptyMap(),
   /** A "Load more" request for issues or merge requests is running. */
   val loadingMore: Boolean = false,
+  /** The last "Load more" failed: the list waits for a tap instead of retrying as it scrolls. */
+  val loadMoreFailed: Boolean = false,
 ) {
   val effectiveRef: String? get() = ref ?: project.data?.defaultBranch
   val webUrl: String? get() = project.data?.webUrl?.takeIf { it.isNotBlank() }

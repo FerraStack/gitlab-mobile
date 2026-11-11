@@ -35,18 +35,19 @@ class ProjectListsTest {
   private val states = mutableListOf<String>()
   private val more = mutableListOf<ProjectSection>()
 
-  private fun state(): ProjectDetailState = Fakes.projectState().copy(
+  private fun state(failed: Boolean = false): ProjectDetailState = Fakes.projectState().copy(
     issues = Loadable(Fakes.issues.filter { it.state == "opened" }, loaded = true),
     issueState = "opened",
     issueCounts = mapOf("opened" to 4012, "closed" to 988, "all" to 5000),
     issuesNextPage = 2,
+    loadMoreFailed = failed,
   )
 
-  private fun show(dark: Boolean = true) = rule.setContent {
+  private fun show(dark: Boolean = true, failed: Boolean = false) = rule.setContent {
     GitLabTheme(darkTheme = dark, reducedMotion = true) {
       ProjectSectionScreen(
         section = ProjectSection.ISSUES,
-        state = state(),
+        state = state(failed),
         labels = Fakes.labels,
         canWrite = true,
         onBack = {},
@@ -82,10 +83,20 @@ class ProjectListsTest {
   }
 
   @Test
-  fun `more pages load on request`() {
+  fun `reaching the end of the list loads the next page by itself`() {
     show()
     rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("load_more"))
-    rule.onNodeWithTag("load_more").performClick()
+    rule.waitForIdle()
+    assertEquals(listOf(ProjectSection.ISSUES), more)
+  }
+
+  @Test
+  fun `after a failed page the list waits for a tap`() {
+    show(failed = true)
+    rule.onNode(hasScrollToNodeAction()).performScrollToNode(hasTestTag("load_more"))
+    rule.waitForIdle()
+    assertEquals(emptyList<ProjectSection>(), more)
+    rule.onNodeWithText("Try again").performClick()
     assertEquals(listOf(ProjectSection.ISSUES), more)
   }
 }
