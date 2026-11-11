@@ -1,12 +1,9 @@
 package com.cboyxd.gitlab.ui
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.provider.DocumentsContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.rememberLauncherForActivityResult
-import android.content.Intent
-import android.net.Uri
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -79,6 +76,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cboyxd.gitlab.data.api.normalizeBaseUrl
+import com.cboyxd.gitlab.openExternalUrl
 import com.cboyxd.gitlab.data.auth.GitLabAuth
 import com.cboyxd.gitlab.ui.components.ErrorState
 import com.cboyxd.gitlab.ui.components.ImageAuth
@@ -724,10 +722,5 @@ private fun InstanceSwitcherSheet(
 }
 
 internal fun openUrl(context: Context, url: String) {
-  if (url.isBlank()) return
-  try {
-    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-  } catch (_: ActivityNotFoundException) {
-    // No browser installed; nothing sensible to do.
-  }
+  openExternalUrl(context, url)
 }
