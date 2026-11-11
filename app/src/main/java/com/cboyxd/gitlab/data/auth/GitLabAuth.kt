@@ -211,4 +211,8 @@ data class OAuthTokenSet(
   val expiresAtEpochSec: Long
 )
 
-class GitLabAuthException(message: String) : Exception(message)
+/**
+ * A sign-in or token failure. [rejected] means GitLab refused the credentials (a revoked or used
+ * refresh token, a removed app); anything else, like no network, may work on a later try.
+ */
+class GitLabAuthException(message: String, val rejected: Boolean = false) : Exception(message)

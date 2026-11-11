@@ -8,7 +8,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** UI and notification workers share one refresh lock: GitLab refresh tokens are single use. */
+/**
+ * UI and notification workers share one refresh lock: GitLab refresh tokens are single use.
+ *
+ * When GitLab rejects a refresh token it stays rejected, so it is dropped from the account. Later
+ * calls then skip refreshing (and its failing token request) until the user signs in again.
+ */
 object GitLabSessionTokens {
   private val lock = Mutex()
 
@@ -20,7 +25,12 @@ object GitLabSessionTokens {
       if (!force && latest.tokenExpiresAt > System.currentTimeMillis() / 1000 + 60) return@withContext latest
       val clientId = latest.oauthClientId.ifBlank { store.getGitLabComClientId() }
       if (clientId.isBlank()) return@withContext latest
-      val tokens = GitLabOAuth.refresh(latest.url, clientId, latest.refreshToken)
+      val tokens = try {
+        GitLabOAuth.refresh(latest.url, clientId, latest.refreshToken)
+      } catch (rejected: GitLabAuthException) {
+        if (rejected.rejected) forgetRefreshToken(store, instanceId, latest.refreshToken)
+        throw rejected
+      }
       val updated = latest.copy(
         token = tokens.accessToken,
         refreshToken = tokens.refreshToken.ifBlank { latest.refreshToken },
@@ -29,5 +39,11 @@ object GitLabSessionTokens {
       )
       if (store.updateInstance(updated)) store.getInstances().firstOrNull { it.id == instanceId } else null
     }
+  }
+
+  /** Drops [used] unless the account already holds a newer refresh token (a sign-in meanwhile). */
+  private fun forgetRefreshToken(store: InstanceStore, instanceId: String, used: String) {
+    val now = store.getInstances().firstOrNull { it.id == instanceId } ?: return
+    if (now.refreshToken == used) store.updateInstance(now.copy(refreshToken = ""))
   }
 }
