@@ -13,6 +13,23 @@
     <!-- Lets the battery helper ask to stop optimizing the app (GitHub build only). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Browsers stay visible when a gitlab.com link has to leave the app (Android 11+). -->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+    </queries>
+
     <application
         android:name=".GitLabApplication"
         android:allowBackup="false"
@@ -43,6 +60,28 @@
                 <data
                     android:host="oauth"
                     android:scheme="com.cboyxd.gitlab" />
+            </intent-filter>
+            <!-- gitlab.com links. Not auto-verified: the user turns this on under Open by default. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="gitlab.com"
+                    android:scheme="https" />
+                <data
+                    android:host="www.gitlab.com"
+                    android:scheme="https" />
+            </intent-filter>
+            <!-- Self-hosted servers have no fixed host, so a shared text URL is the way in. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
 

@@ -1,9 +1,13 @@
 package com.cboyxd.gitlab.data.auth
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
+import com.cboyxd.gitlab.IncomingLinks
+import com.cboyxd.gitlab.viewResolvesToThisApp
 import com.cboyxd.gitlab.data.storage.AndroidKeyStoreSecretStore
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
@@ -65,9 +69,17 @@ object GitLabOAuth {
   }
 
   fun openBrowser(context: Context, pending: PendingOAuth, provider: String = "") {
+    val uri = Uri.parse(authorizationUrl(pending, provider))
     val tabs = CustomTabsIntent.Builder().setShowTitle(true).build()
     tabs.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    tabs.launchUrl(context, Uri.parse(authorizationUrl(pending, provider)))
+    // The https filter can claim gitlab.com. The authorize page still has to load in a
+    // browser, so GitLab can redirect back to the oauth scheme.
+    if (IncomingLinks.claimsHost(uri.host) && viewResolvesToThisApp(context, uri)) {
+      val browser = CustomTabsClient.getPackageName(context, null)?.takeIf { it != context.packageName }
+        ?: throw ActivityNotFoundException()
+      tabs.intent.setPackage(browser)
+    }
+    tabs.launchUrl(context, uri)
   }
 
   fun exchange(pending: PendingOAuth, code: String, http: OkHttpClient = tokenClient()): OAuthTokenSet {

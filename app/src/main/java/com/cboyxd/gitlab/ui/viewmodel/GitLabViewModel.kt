@@ -1038,6 +1038,20 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  /**
+   * A gitlab.com link, or a URL shared into the app. Waits until the active server is known.
+   * [ExploreFeature.handleLink] returns false for another server or a screen the app lacks;
+   * that link is opened outside the app, the same as one tapped in Markdown.
+   */
+  fun openIncomingLink(url: String) {
+    val target = url.trim()
+    if (target.isBlank()) return
+    viewModelScope.launch {
+      _uiState.first { it.bootstrapped }
+      if (!explore.handleLink(target)) host.openExternal(target)
+    }
+  }
+
   fun openSystemNotification(accountId: String, targetType: String, projectId: Long, iid: Long, url: String) {
     viewModelScope.launch {
       _uiState.first { it.bootstrapped }

@@ -1,6 +1,7 @@
 package com.cboyxd.gitlab.ui.viewmodel
 
 import android.net.Uri
+import com.cboyxd.gitlab.IncomingLinks
 import com.cboyxd.gitlab.data.api.normalizeBaseUrl
 import com.cboyxd.gitlab.data.model.GitLabGroup
 import com.cboyxd.gitlab.data.model.GitLabProject
@@ -167,7 +168,7 @@ class ExploreFeature internal constructor(private val host: SessionHost) {
     val instance = host.state.value.activeInstance ?: return false
     val base = runCatching { Uri.parse(normalizeBaseUrl(instance.url)) }.getOrNull() ?: return false
     val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
-    if (!uri.host.equals(base.host, ignoreCase = true)) return false
+    if (!IncomingLinks.sameServer(uri.host, base.host)) return false
     val prefix = base.path.orEmpty().trimEnd('/')
     val path = uri.path.orEmpty().removePrefix(prefix).trim('/')
     if (path.isEmpty()) return false

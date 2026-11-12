@@ -99,9 +99,17 @@ class MainActivity : ComponentActivity() {
       setIntent(Intent(this, MainActivity::class.java))
       return
     }
-    val data = intent?.data ?: return
-    if (data.scheme != "com.cboyxd.gitlab" || data.host != "oauth") return
-    viewModel.completeOAuthRedirect(data)
-    setIntent(Intent(intent).apply { this.data = null })
+    if (intent == null) return
+    val data = intent.data
+    if (data != null && IncomingLinks.isOAuthRedirect(intent.dataString)) {
+      viewModel.completeOAuthRedirect(data)
+      setIntent(Intent(intent).apply { this.data = null })
+      return
+    }
+    val shared = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+    val url = IncomingLinks.webUrl(intent.action, intent.dataString, shared) ?: return
+    viewModel.openIncomingLink(url)
+    // Drop the link from the activity so a recreated instance does not open it twice.
+    setIntent(Intent(this, MainActivity::class.java))
   }
 }
