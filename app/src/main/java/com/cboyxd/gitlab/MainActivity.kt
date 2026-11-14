@@ -89,13 +89,15 @@ class MainActivity : ComponentActivity() {
 
   private fun handleIncomingIntent(intent: Intent?) {
     if (intent?.action == GitLabNotifications.ACTION_OPEN) {
-      viewModel.openSystemNotification(
-        accountId = intent.getStringExtra(GitLabNotifications.EXTRA_ACCOUNT).orEmpty(),
-        targetType = intent.getStringExtra(GitLabNotifications.EXTRA_TARGET).orEmpty(),
-        projectId = intent.getLongExtra(GitLabNotifications.EXTRA_PROJECT, 0),
-        iid = intent.getLongExtra(GitLabNotifications.EXTRA_IID, 0),
-        url = intent.getStringExtra(GitLabNotifications.EXTRA_URL).orEmpty(),
-      )
+      GitLabNotifications.parseTrustedOpenIntent(this, intent)?.let { open ->
+        viewModel.openSystemNotification(
+          accountId = open.accountId,
+          targetType = open.targetType,
+          projectId = open.projectId,
+          iid = open.iid,
+          url = open.url,
+        )
+      }
       setIntent(Intent(this, MainActivity::class.java))
       return
     }

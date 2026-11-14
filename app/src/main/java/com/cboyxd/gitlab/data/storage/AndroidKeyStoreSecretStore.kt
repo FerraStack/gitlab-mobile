@@ -44,6 +44,10 @@ class AndroidKeyStoreSecretStore(context: Context, name: String) {
     return legacy
   }
 
+  /** Returns the raw stored value without decrypting, e.g. to back up unreadable ciphertext. */
+  @Synchronized
+  fun rawGet(key: String): String? = preferences.getString(key, null)
+
   @Synchronized
   fun put(key: String, value: String) {
     preferences.edit().putString(key, encrypt(value)).commit()

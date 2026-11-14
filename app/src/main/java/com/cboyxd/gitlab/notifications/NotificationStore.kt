@@ -1,7 +1,9 @@
 package com.cboyxd.gitlab.notifications
 
 import android.content.Context
+import android.util.Base64
 import org.json.JSONObject
+import java.security.SecureRandom
 
 internal data class GitLabNotificationEvent(
   val id: String,
@@ -37,6 +39,22 @@ internal class NotificationStore(context: Context) {
     return prefs.edit().putStringSet(key, ids).commit()
   }
 
+  /**
+   * Secret attached to notification tap intents so external apps cannot forge [GitLabNotifications.ACTION_OPEN]
+   * extras against the exported [com.cboyxd.gitlab.MainActivity]. Stored in private prefs so taps
+   * still work after process death.
+   */
+  @Synchronized
+  fun openIntentToken(): String {
+    val existing = prefs.getString(KEY_OPEN_INTENT_TOKEN, null)
+    if (!existing.isNullOrBlank()) return existing
+    val bytes = ByteArray(32)
+    SecureRandom().nextBytes(bytes)
+    val generated = Base64.encodeToString(bytes, Base64.NO_WRAP)
+    prefs.edit().putString(KEY_OPEN_INTENT_TOKEN, generated).commit()
+    return generated
+  }
+
   fun prune(accounts: Set<String>) {
     val editor = prefs.edit()
     prefs.all.keys.forEach { key ->
@@ -44,5 +62,9 @@ internal class NotificationStore(context: Context) {
       if (account != null && account !in accounts) editor.remove(key)
     }
     editor.apply()
+  }
+
+  private companion object {
+    const val KEY_OPEN_INTENT_TOKEN = "open_intent_token"
   }
 }

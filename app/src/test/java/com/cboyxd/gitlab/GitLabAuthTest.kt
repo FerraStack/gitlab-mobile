@@ -4,7 +4,11 @@ import com.cboyxd.gitlab.data.auth.GitLabAuth
 import com.cboyxd.gitlab.data.auth.GitLabOAuth
 import com.cboyxd.gitlab.data.auth.GitLabPasswordLogin
 import com.cboyxd.gitlab.data.auth.PasswordLoginOutcome
+import com.cboyxd.gitlab.data.auth.GitLabTokenRevoker
 import com.cboyxd.gitlab.data.auth.PendingOAuth
+import com.cboyxd.gitlab.data.model.GitLabInstance
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.OkHttpClient
@@ -198,5 +202,142 @@ class GitLabAuthTest {
       })
       .build()
     return server to client
+  }
+
+  @Test
+  fun `password sign-in revokes previous gitlab-mobile token from json payload before creating new one`() {
+    val (server, client) = secureServer()
+    try {
+      server.enqueue(signInPage("csrf-1"))
+      server.enqueue(
+        MockResponse()
+          .setResponseCode(302)
+          .addHeader("Location", server.url("/").toString())
+          .addHeader("Set-Cookie", "_gitlab_session=signed-in; Path=/")
+      )
+      server.enqueue(MockResponse().setBody("<html><body>Home</body></html>"))
+      server.enqueue(
+        MockResponse().setBody(
+          """
+          <html><head><meta name="csrf-token" content="csrf-pat" /></head><body>
+          <div id="js-personal-access-tokens-app" data-initial-active-access-tokens="[{&quot;id&quot;:42,&quot;name&quot;:&quot;gitlab-mobile&quot;,&quot;revoked&quot;:false,&quot;scopes&quot;:[&quot;api&quot;],&quot;revoke_path&quot;:&quot;/-/user_settings/personal_access_tokens/42/revoke&quot;},{&quot;id&quot;:43,&quot;name&quot;:&quot;gitlab-mobile&quot;,&quot;revoked&quot;:true,&quot;revoke_path&quot;:&quot;/-/user_settings/personal_access_tokens/43/revoke&quot;},{&quot;id&quot;:44,&quot;name&quot;:&quot;laptop&quot;,&quot;revoked&quot;:false,&quot;revoke_path&quot;:&quot;/-/user_settings/personal_access_tokens/44/revoke&quot;}]"></div>
+          </body></html>
+          """.trimIndent()
+        )
+      )
+      server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
+      server.enqueue(MockResponse().setBody("""{"new_token":"glpat-fresh"}""").addHeader("Content-Type", "application/json"))
+
+      val outcome = GitLabPasswordLogin(client).signIn(server.url("/").toString(), "dev", "secret")
+
+      assertTrue(outcome is PasswordLoginOutcome.TokenReady)
+      assertEquals("glpat-fresh", (outcome as PasswordLoginOutcome.TokenReady).token)
+      assertEquals(6, server.requestCount)
+      repeat(4) { server.takeRequest() }
+      val revokeReq = server.takeRequest()
+      assertEquals("PUT", revokeReq.method)
+      assertEquals("/-/user_settings/personal_access_tokens/42/revoke", revokeReq.path)
+      assertEquals("csrf-pat", revokeReq.getHeader("X-CSRF-Token"))
+      val createReq = server.takeRequest()
+      assertEquals("POST", createReq.method)
+      assertEquals("/-/user_settings/personal_access_tokens", createReq.path)
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  @Test
+  fun `password sign-in revokes previous gitlab-mobile token in legacy html table and ignores revoke failures`() {
+    val (server, client) = secureServer()
+    try {
+      server.enqueue(signInPage("csrf-1"))
+      server.enqueue(
+        MockResponse()
+          .setResponseCode(302)
+          .addHeader("Location", server.url("/").toString())
+          .addHeader("Set-Cookie", "_gitlab_session=signed-in; Path=/")
+      )
+      server.enqueue(MockResponse().setBody("<html><body>Home</body></html>"))
+      server.enqueue(MockResponse().setResponseCode(404))
+      server.enqueue(
+        MockResponse().setBody(
+          """
+          <html><head><meta name="csrf-token" content="csrf-legacy" /></head><body>
+          <table><tbody>
+            <tr><td>gitlab-mobile</td><td>api</td><td><a data-method="put" href="/profile/personal_access_tokens/77/revoke">Revoke</a></td></tr>
+            <tr><td>cli</td><td>read_api</td><td><a data-method="put" href="/profile/personal_access_tokens/78/revoke">Revoke</a></td></tr>
+          </tbody></table>
+          </body></html>
+          """.trimIndent()
+        )
+      )
+      // Revoke fails with 500, sign-in still creates the new token.
+      server.enqueue(MockResponse().setResponseCode(500))
+      server.enqueue(MockResponse().setBody("""{"token":"glpat-legacy-new"}"""))
+
+      val outcome = GitLabPasswordLogin(client).signIn(server.url("/").toString(), "dev", "secret")
+      assertTrue(outcome is PasswordLoginOutcome.TokenReady)
+      assertEquals("glpat-legacy-new", (outcome as PasswordLoginOutcome.TokenReady).token)
+      repeat(5) { server.takeRequest() }
+      val revokeReq = server.takeRequest()
+      assertEquals("PUT", revokeReq.method)
+      assertEquals("/profile/personal_access_tokens/77/revoke", revokeReq.path)
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  @Test
+  fun `token revoker calls self endpoint for pat and password accounts and oauth revoke for oauth accounts`() {
+    val (server, client) = secureServer()
+    try {
+      server.enqueue(MockResponse().setResponseCode(204))
+      val pat = GitLabInstance(
+        name = "Work",
+        url = server.url("/").toString(),
+        token = "glpat-secret",
+        authKind = GitLabAuth.KIND_PASSWORD,
+      )
+      assertTrue(GitLabTokenRevoker.revoke(pat, http = client))
+      val patReq = server.takeRequest()
+      assertEquals("DELETE", patReq.method)
+      assertEquals("/api/v4/personal_access_tokens/self", patReq.path)
+      assertEquals("glpat-secret", patReq.getHeader("PRIVATE-TOKEN"))
+
+      server.enqueue(MockResponse().setResponseCode(200))
+      server.enqueue(MockResponse().setResponseCode(200))
+      val oauth = GitLabInstance(
+        name = "GitLab.com",
+        url = server.url("/").toString(),
+        token = "access-123",
+        refreshToken = "refresh-456",
+        authKind = GitLabAuth.KIND_OAUTH,
+        oauthClientId = "app-id",
+      )
+      assertTrue(GitLabTokenRevoker.revoke(oauth, http = client))
+      val r1 = server.takeRequest()
+      val r2 = server.takeRequest()
+      assertEquals("POST", r1.method)
+      assertEquals("/oauth/revoke", r1.path)
+      assertEquals("POST", r2.method)
+      assertEquals("/oauth/revoke", r2.path)
+      val bodies = listOf(r1.body.readUtf8(), r2.body.readUtf8())
+      assertTrue(bodies.any { it.contains("token=refresh-456") && it.contains("client_id=app-id") })
+      assertTrue(bodies.any { it.contains("token=access-123") && it.contains("client_id=app-id") })
+
+      // Public guest accounts do not send any revoke request.
+      assertFalse(GitLabTokenRevoker.revoke(GitLabAuth.GUEST, http = client))
+      assertEquals(3, server.requestCount)
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  @Test
+  fun `oauth tokenClient reuses shared client and sets a call timeout`() {
+    val first = GitLabOAuth.tokenClient()
+    val second = GitLabOAuth.tokenClient()
+    assertSame(first, second)
+    assertTrue(first.callTimeoutMillis in 1..60_000)
   }
 }

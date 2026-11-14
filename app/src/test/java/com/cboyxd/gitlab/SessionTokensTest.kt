@@ -8,7 +8,11 @@ import com.cboyxd.gitlab.data.auth.GitLabAuthException
 import com.cboyxd.gitlab.data.auth.GitLabSessionTokens
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.storage.InstanceStore
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -124,5 +128,87 @@ class SessionTokensTest {
     server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("""{"access_token":"new-access","refresh_token":"refresh-2","expires_in":7200,"created_at":1762500000,"token_type":"Bearer"}"""))
     assertEquals("new-access", refresh().getOrThrow()?.token)
     assertEquals("refresh-2", stored().refreshToken)
+  }
+
+  @Test
+  fun `fresh returns fast-path cached unexpired token without network requests`() {
+    val valid = store.addInstance(
+      GitLabInstance(
+        name = "Fresh",
+        url = server.url("/").toString(),
+        token = "fresh-access",
+        username = "dev2",
+        isActive = false,
+        authKind = GitLabAuth.KIND_OAUTH,
+        refreshToken = "refresh-fresh",
+        tokenExpiresAt = System.currentTimeMillis() / 1000 + 3600,
+        oauthClientId = "client-1",
+      )
+    )
+    // Populate cache.
+    store.getInstances()
+    val result = runBlocking { GitLabSessionTokens.fresh(store, valid.id) }
+    assertEquals("fresh-access", result?.token)
+    assertEquals(0, server.requestCount)
+  }
+
+  @Test
+  fun `slow refresh on one account does not block another account`() {
+    val other = store.addInstance(
+      GitLabInstance(
+        name = "Other",
+        url = server.url("/").toString(),
+        token = "other-access",
+        username = "other",
+        isActive = false,
+        authKind = GitLabAuth.KIND_OAUTH,
+        refreshToken = "refresh-other",
+        tokenExpiresAt = System.currentTimeMillis() / 1000 + 3600,
+        oauthClientId = "client-2",
+      )
+    )
+    val enteredSlowRefresh = CountDownLatch(1)
+    val releaseSlowRefresh = CountDownLatch(1)
+    server.dispatcher = object : Dispatcher() {
+      override fun dispatch(request: RecordedRequest): MockResponse {
+        enteredSlowRefresh.countDown()
+        releaseSlowRefresh.await(5, TimeUnit.SECONDS)
+        return MockResponse()
+          .addHeader("Content-Type", "application/json")
+          .setBody("""{"access_token":"new-access","refresh_token":"refresh-2","expires_in":7200,"created_at":1762500000,"token_type":"Bearer"}""")
+      }
+    }
+
+    runBlocking {
+      coroutineScope {
+        val slow = async(kotlinx.coroutines.Dispatchers.Default) {
+          GitLabSessionTokens.fresh(store, account.id)
+        }
+        assertTrue(enteredSlowRefresh.await(5, TimeUnit.SECONDS))
+        // Other account must finish immediately while account's refresh is still blocked.
+        val otherResult = GitLabSessionTokens.fresh(store, other.id)
+        assertEquals("other-access", otherResult?.token)
+        releaseSlowRefresh.countDown()
+        assertEquals("new-access", slow.await()?.token)
+      }
+    }
+  }
+
+  @Test
+  fun `metadata patched while refresh is in flight is preserved`() {
+    server.dispatcher = object : Dispatcher() {
+      override fun dispatch(request: RecordedRequest): MockResponse {
+        store.patch(account.id) { it.copy(version = "17.9.0", statusOk = true) }
+        return MockResponse()
+          .addHeader("Content-Type", "application/json")
+          .setBody("""{"access_token":"new-access","refresh_token":"refresh-2","expires_in":7200,"created_at":1762500000,"token_type":"Bearer"}""")
+      }
+    }
+
+    val updated = refresh().getOrThrow()!!
+    assertEquals("new-access", updated.token)
+    assertEquals("refresh-2", updated.refreshToken)
+    assertEquals("17.9.0", updated.version)
+    assertTrue(updated.statusOk)
   }
 }

@@ -23,6 +23,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.cboyxd.gitlab.MainActivity
 import com.cboyxd.gitlab.R
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 object GitLabNotifications {
@@ -32,6 +33,7 @@ object GitLabNotifications {
   const val EXTRA_PROJECT = "project_id"
   const val EXTRA_IID = "target_iid"
   const val EXTRA_URL = "target_url"
+  internal const val EXTRA_TOKEN = "open_token"
   internal const val REVIEWS = "gitlab_reviews"
   internal const val ACTIVITY = "gitlab_activity"
   internal const val PIPELINES = "gitlab_pipelines"
@@ -78,16 +80,7 @@ object GitLabNotifications {
   /** Posts [event]; false when notifications are off or the permission was just revoked. */
   internal fun show(context: Context, event: GitLabNotificationEvent, now: Long = System.currentTimeMillis()): Boolean {
     if (!allowed(context)) return false
-    val intent = Intent(context, MainActivity::class.java).apply {
-      action = ACTION_OPEN
-      data = Uri.Builder().scheme("gitlab-mobile").authority("notification").appendPath(event.accountId).appendPath(event.id).build()
-      flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-      putExtra(EXTRA_ACCOUNT, event.accountId)
-      putExtra(EXTRA_TARGET, event.targetType)
-      putExtra(EXTRA_PROJECT, event.projectId)
-      putExtra(EXTRA_IID, event.iid)
-      putExtra(EXTRA_URL, event.url)
-    }
+    val intent = openIntent(context, event)
     val click = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     // A late check must not make an old event look new: say how old it is instead of a bare time.
     val delay = NotificationPresentation.delayLabel(event.createdAt, now)
@@ -115,6 +108,46 @@ object GitLabNotifications {
       // Permission can be revoked between the check and posting.
       false
     }
+  }
+
+  internal fun openIntent(context: Context, event: GitLabNotificationEvent): Intent =
+    Intent(context, MainActivity::class.java).apply {
+      action = ACTION_OPEN
+      data = Uri.Builder().scheme("gitlab-mobile").authority("notification").appendPath(event.accountId).appendPath(event.id).build()
+      flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      putExtra(EXTRA_ACCOUNT, event.accountId)
+      putExtra(EXTRA_TARGET, event.targetType)
+      putExtra(EXTRA_PROJECT, event.projectId)
+      putExtra(EXTRA_IID, event.iid)
+      putExtra(EXTRA_URL, event.url)
+      putExtra(EXTRA_TOKEN, NotificationStore(context).openIntentToken())
+    }
+
+  internal data class TrustedNotificationOpen(
+    val accountId: String,
+    val targetType: String,
+    val projectId: Long,
+    val iid: Long,
+    val url: String,
+  )
+
+  internal fun parseTrustedOpenIntent(context: Context, intent: Intent?): TrustedNotificationOpen? {
+    if (!isTrustedOpenIntent(context, intent)) return null
+    val src = intent ?: return null
+    return TrustedNotificationOpen(
+      accountId = src.getStringExtra(EXTRA_ACCOUNT).orEmpty(),
+      targetType = src.getStringExtra(EXTRA_TARGET).orEmpty(),
+      projectId = src.getLongExtra(EXTRA_PROJECT, 0),
+      iid = src.getLongExtra(EXTRA_IID, 0),
+      url = src.getStringExtra(EXTRA_URL).orEmpty(),
+    )
+  }
+
+  internal fun isTrustedOpenIntent(context: Context, intent: Intent?): Boolean {
+    if (intent?.action != ACTION_OPEN) return false
+    val provided = intent.getStringExtra(EXTRA_TOKEN)?.takeIf { it.isNotBlank() } ?: return false
+    val expected = NotificationStore(context).openIntentToken()
+    return MessageDigest.isEqual(provided.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))
   }
 
   private fun groupKey(accountId: String) = "gitlab:$accountId"
