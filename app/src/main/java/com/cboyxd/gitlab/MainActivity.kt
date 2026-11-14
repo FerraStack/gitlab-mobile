@@ -11,6 +11,7 @@ import com.cboyxd.gitlab.notifications.GitLabNotifications
 import com.cboyxd.gitlab.notifications.GitLabNotificationMonitor
 import com.cboyxd.gitlab.notifications.InstantNotificationService
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -44,6 +45,14 @@ class MainActivity : ComponentActivity() {
     if (savedInstanceState == null) handleIncomingIntent(intent)
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) {
+        launch {
+          viewModel.setForeground(true)
+          try {
+            awaitCancellation()
+          } finally {
+            viewModel.setForeground(false)
+          }
+        }
         launch {
           viewModel.uiState.first { it.bootstrapped }
           viewModel.uiState.map { it.savedInstances.filter { account -> account.token.isNotBlank() }.map { account -> account.id }.sorted() }

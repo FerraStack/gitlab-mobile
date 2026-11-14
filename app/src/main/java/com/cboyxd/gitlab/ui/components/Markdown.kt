@@ -239,22 +239,44 @@ private fun MdBlockView(block: MdBlock, textStyle: TextStyle, context: MarkdownC
 private fun MdImageView(image: MdImage, fullWidth: Boolean, context: MarkdownContext) {
   val c = Gl.colors
   val open = LocalUriHandler.current
-  val base = Modifier
-    .clip(RoundedCornerShape(if (fullWidth) GlRadius.chip else 4.dp))
-    .semantics { contentDescription = image.alt.ifBlank { "Image" } }
+  val description = image.alt.ifBlank { "Image" }
   val clickable = image.link?.let { link ->
     Modifier.pressable(onClick = { if (context.onLink?.invoke(link) != true) runCatching { open.openUri(link) } }, scaleOnPress = false)
   } ?: Modifier
-  AsyncImage(
-    model = rememberImageModel(image.url),
-    contentDescription = null,
-    contentScale = if (fullWidth) ContentScale.FillWidth else ContentScale.Fit,
-    modifier = if (fullWidth) {
-      base.then(clickable).fillMaxWidth().heightIn(max = 480.dp).border(1.dp, c.imageOutline, RoundedCornerShape(GlRadius.chip))
-    } else {
-      base.then(clickable).height(20.dp).widthIn(max = 220.dp)
-    },
-  )
+  if (fullWidth) {
+    AsyncImage(
+      model = rememberImageModel(image.url),
+      contentDescription = null,
+      contentScale = ContentScale.FillWidth,
+      modifier = Modifier
+        .clip(RoundedCornerShape(GlRadius.chip))
+        .then(clickable)
+        .then(if (image.link != null) Modifier.heightIn(min = 48.dp) else Modifier)
+        .semantics { contentDescription = description }
+        .fillMaxWidth()
+        .heightIn(max = 480.dp)
+        .border(1.dp, c.imageOutline, RoundedCornerShape(GlRadius.chip)),
+    )
+  } else {
+    Box(
+      modifier = Modifier
+        .then(if (image.link != null) Modifier.widthIn(min = 48.dp).heightIn(min = 48.dp) else Modifier)
+        .clip(RoundedCornerShape(4.dp))
+        .then(clickable)
+        .semantics(mergeDescendants = true) { contentDescription = description },
+      contentAlignment = Alignment.Center,
+    ) {
+      AsyncImage(
+        model = rememberImageModel(image.url),
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier
+          .clip(RoundedCornerShape(4.dp))
+          .height(20.dp)
+          .widthIn(max = 220.dp),
+      )
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------

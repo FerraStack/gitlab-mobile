@@ -13,14 +13,28 @@ internal val JobConsoleBackground = Color(0xFF18171D)
 internal val JobConsoleForeground = Color(0xFFCCCCCC)
 internal val JobConsoleMuted = Color(0xFF89888D)
 
+internal const val MAX_LOG_COLUMNS = 800
+internal const val MAX_LOG_WRAPPED_CHARS = 5_000
+
 internal data class JobTraceLine(
-  val number: Int,
+  val number: Int?,
+  val byteOffset: Long,
   val text: AnnotatedString,
   val timestamp: String?,
   val sectionKey: String? = null,
   val parents: List<String> = emptyList(),
   val initiallyCollapsed: Boolean = false,
 )
+
+/** [text] cut to what a log row can lay out without freezing the UI, with "…" when cut. */
+internal fun jobTraceDisplayText(text: AnnotatedString, wrapped: Boolean): AnnotatedString {
+  val limit = if (wrapped) MAX_LOG_WRAPPED_CHARS else MAX_LOG_COLUMNS
+  return when {
+    text.length > limit -> text.subSequence(0, limit) + AnnotatedString("…")
+    text.isEmpty() -> AnnotatedString(" ")
+    else -> text
+  }
+}
 
 private val tracePrefix = Regex("""^(\d{4}-\d{2}-\d{2}T\S+)\s+\d{2}[OE]\+? ?""")
 private val sectionStart = Regex("""section_start:(\d+):([A-Za-z0-9_.\-]+)(\[[^\]]*])?\r?(\u001B\[0K)?""")
@@ -47,11 +61,44 @@ private fun terminalColor(index: Int): Color? = when (index) {
   else -> null
 }
 
-internal fun parseJobTrace(raw: String): List<JobTraceLine> {
+private fun utf8ByteLength(s: String, start: Int, end: Int): Int {
+  var bytes = 0
+  var i = start
+  while (i < end) {
+    val c = s[i].code
+    when {
+      c < 0x80 -> { bytes += 1; i += 1 }
+      c < 0x800 -> { bytes += 2; i += 1 }
+      Character.isHighSurrogate(s[i]) && i + 1 < end && Character.isLowSurrogate(s[i + 1]) -> {
+        bytes += 4; i += 2
+      }
+      else -> { bytes += 3; i += 1 }
+    }
+  }
+  return bytes
+}
+
+internal fun parseJobTrace(
+  raw: String,
+  startOffset: Long = 0L,
+  firstLineNumber: Int? = 1,
+): List<JobTraceLine> {
+  if (raw.isEmpty()) return emptyList()
   val renderer = TerminalStyle()
   val result = ArrayList<JobTraceLine>()
   val sections = mutableListOf<Pair<String, String>>()
-  raw.lineSequence().forEachIndexed { index, rawLine ->
+  var pos = 0
+  var lineOffset = startOffset
+  var lineIndex = 0
+  while (pos < raw.length) {
+    val nl = raw.indexOf('\n', pos)
+    val lineEnd = if (nl >= 0) nl else raw.length
+    val nextPos = if (nl >= 0) nl + 1 else raw.length
+    val currentByteOffset = lineOffset
+    lineOffset += utf8ByteLength(raw, pos, nextPos)
+    val rawLine = raw.substring(pos, lineEnd)
+    pos = nextPos
+
     val prefix = tracePrefix.find(rawLine)
     var line = if (prefix != null) rawLine.removeRange(prefix.range) else rawLine
     val timestamp = prefix?.groupValues?.get(1)?.substringAfter('T')?.removeSuffix("Z")?.take(12)
@@ -74,9 +121,19 @@ internal fun parseJobTrace(raw: String): List<JobTraceLine> {
     if (start != null && text.isBlank()) {
       text = AnnotatedString(start.groupValues[2].removePrefix("step_").replace('_', ' ').replaceFirstChar { it.uppercase() })
     }
-    if (end != null && text.isBlank() && start == null) return@forEachIndexed
+    val currentLineNumber = firstLineNumber?.let { it + lineIndex }
+    lineIndex++
+    if (end != null && text.isBlank() && start == null) continue
     val key = start?.let { "${it.groupValues[1]}:${it.groupValues[2]}" }
-    result += JobTraceLine(index + 1, text, timestamp, key, sections.map { it.first }, start?.groupValues?.get(3)?.contains("collapsed=true") == true)
+    result += JobTraceLine(
+      number = currentLineNumber,
+      byteOffset = currentByteOffset,
+      text = text,
+      timestamp = timestamp,
+      sectionKey = key,
+      parents = sections.map { it.first },
+      initiallyCollapsed = start?.groupValues?.get(3)?.contains("collapsed=true") == true,
+    )
     if (start != null && key != null) sections += key to start.groupValues[2]
   }
   while (result.lastOrNull()?.text?.isEmpty() == true) result.removeAt(result.lastIndex)

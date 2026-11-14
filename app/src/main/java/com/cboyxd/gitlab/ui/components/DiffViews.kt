@@ -52,6 +52,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -275,6 +276,25 @@ fun commentedLines(discussions: List<GitLabDiscussion>, headSha: String?): Set<S
 fun diffGutterWidth(maxLine: Int): Dp = (maxLine.toString().length.coerceAtLeast(2) * 8 + 16).dp
 
 /**
+ * Width of the diff line-number gutter measured for the current font size and system font scale,
+ * so line numbers don't clip at large font sizes.
+ */
+@Composable
+fun rememberDiffGutterWidth(maxLine: Int): Dp {
+  val options = LocalDiffDisplayOptions.current
+  val style = Gl.type.mono.copy(fontSize = (options.fontSize - 1).sp)
+  val digits = maxLine.toString().length.coerceAtLeast(2)
+  val measurer = rememberTextMeasurer()
+  val density = LocalDensity.current
+  val textWidth = remember(style, digits, density.fontScale, density.density) {
+    val sample = "8".repeat(digits)
+    with(density) { measurer.measure(sample, style, maxLines = 1, softWrap = false).size.width.toDp() }
+  }
+  // 2dp start + 6dp end padding inside the gutter cell + 2dp breathing room.
+  return textWidth + 10.dp
+}
+
+/**
  * Unified diff with old/new line numbers, syntax colors and an optional shared horizontal scroll.
  */
 @Composable
@@ -489,10 +509,11 @@ fun LazyListScope.diffFileItems(
       }
       lines == null -> item(key = "file-$index-loading") { LoadingState(label = "Loading changes") }
       else -> {
-        val gutter = diffGutterWidth(lines.maxOfOrNull { maxOf(it.oldNo ?: 0, it.newNo ?: 0) } ?: 0)
+        val maxLine = lines.maxOfOrNull { maxOf(it.oldNo ?: 0, it.newNo ?: 0) } ?: 0
         val texts = prepared[index]
         val maxColumns = (lines.maxOfOrNull { it.text.length } ?: 0).coerceAtMost(MAX_DIFF_COLUMNS)
         items(lines.size, key = { "file-$index-line-$it" }) { n ->
+          val gutter = rememberDiffGutterWidth(maxLine)
           val scroll = if (wrapLines) null else LocalDiffScrollStates.current.getOrPut(index) { ScrollState(0) }
           val screenWidth = LocalConfiguration.current.screenWidthDp.dp
           val options = LocalDiffDisplayOptions.current
@@ -556,7 +577,7 @@ fun DiffViewer(diffText: String, modifier: Modifier = Modifier, path: String = "
   LaunchedEffect(diffText, c, expanded) {
     texts = withContext(Dispatchers.Default) { prepareDiffLines(visible, path, c) }
   }
-  val gutter = diffGutterWidth(lines.maxOfOrNull { maxOf(it.oldNo ?: 0, it.newNo ?: 0) } ?: 0)
+  val gutter = rememberDiffGutterWidth(lines.maxOfOrNull { maxOf(it.oldNo ?: 0, it.newNo ?: 0) } ?: 0)
   Column(modifier = modifier.fillMaxWidth()) {
     visible.forEachIndexed { index, line -> DiffLineRow(line, texts?.getOrNull(index), gutter) }
     if (lines.size > DIFF_PREVIEW_LINES) {
