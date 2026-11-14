@@ -6,6 +6,7 @@ import com.cboyxd.gitlab.data.repository.GitLabRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -18,6 +19,7 @@ internal interface SessionHost {
   val repository: GitLabRepository
   val session: CoroutineScope
   val state: MutableStateFlow<GitLabUiState>
+  val foreground: StateFlow<Boolean>
 
   /** Runs a request against the active server, refreshing an expired OAuth token once. */
   suspend fun <T> api(block: suspend (GitLabInstance) -> Result<T>): Result<T>

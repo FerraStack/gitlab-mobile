@@ -11,6 +11,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,6 +56,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -61,9 +64,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -514,6 +516,7 @@ fun JobDetailScreen(
 private fun JobLog(state: JobDetailState, onRetryLoad: () -> Unit, modifier: Modifier = Modifier) {
   val c = Gl.colors
   val trace = state.trace.data
+  val isRunning = state.job.data?.status in ACTIVE_STATUSES
   when {
     trace == null && state.trace.error != null -> Box(modifier.fillMaxWidth()) { ErrorState(state.trace.error, onRetryLoad) }
     trace == null -> Box(modifier.fillMaxWidth()) { LoadingState(label = "Loading log") }
@@ -521,8 +524,11 @@ private fun JobLog(state: JobDetailState, onRetryLoad: () -> Unit, modifier: Mod
       Text("This job hasn't written any output yet.", style = Gl.type.bodySmall, color = c.textSecondary)
     }
     else -> {
-      val lines by produceState<List<JobTraceLine>?>(null, state.jobId, trace.text) {
-        value = withContext(Dispatchers.Default) { parseJobTrace(trace.text) }
+      val firstLineNumber = if (!trace.truncated) 1 else trace.earlierLines?.plus(1)
+      val lines by produceState<List<JobTraceLine>?>(null, state.jobId, trace.text, trace.startOffset, firstLineNumber) {
+        value = withContext(Dispatchers.Default) {
+          parseJobTrace(trace.text, startOffset = trace.startOffset, firstLineNumber = firstLineNumber)
+        }
       }
       val parsed = lines
       if (parsed == null) {
@@ -536,22 +542,55 @@ private fun JobLog(state: JobDetailState, onRetryLoad: () -> Unit, modifier: Mod
       val visible = remember(parsed, collapsed) { parsed.filter { line -> line.parents.none { it in collapsed } } }
       var timestamps by rememberSaveable(state.jobId) { mutableStateOf(false) }
       var wrap by rememberSaveable(state.jobId) { mutableStateOf(true) }
+      var follow by rememberSaveable(state.jobId) { mutableStateOf(true) }
       val listState = rememberLazyListState()
       val scope = rememberCoroutineScope()
       val total = visible.size + if (trace.truncated) 1 else 0
+      val lastByteOffset = visible.lastOrNull()?.byteOffset
       var scrolledInitially by remember(state.jobId) { mutableStateOf(false) }
-      LaunchedEffect(state.jobId, total) {
-        if (!scrolledInitially && total > 0) {
+      LaunchedEffect(state.jobId, total, lastByteOffset, follow, isRunning) {
+        if (total > 0 && (!scrolledInitially || (isRunning && follow))) {
           listState.scrollToItem(total - 1)
           scrolledInitially = true
         }
       }
+      LaunchedEffect(listState, isRunning) {
+        var wasScrolling = false
+        snapshotFlow { listState.isScrollInProgress to !listState.canScrollForward }.collect { (scrolling, atBottom) ->
+          if (scrolling) {
+            wasScrolling = true
+            if (!atBottom) follow = false
+          } else if (wasScrolling) {
+            wasScrolling = false
+            if (atBottom && isRunning) follow = true
+          }
+        }
+      }
       val style = Gl.type.monoSmall.copy(fontFamily = CodeFont, fontSize = 12.sp, lineHeight = 18.sp)
       val measurer = rememberTextMeasurer()
-      val charWidth = remember(style) { measurer.measure("0", style).size.width.toFloat() }
-      val longest = remember(parsed) { (parsed.maxOfOrNull { it.text.length } ?: 0).coerceAtMost(600) }
-      val contentWidth = with(LocalDensity.current) { (charWidth * (longest + 8 + if (timestamps) 14 else 0)).toDp() } + 32.dp
-      val numberWidth = with(LocalDensity.current) { (charWidth * ((parsed.lastOrNull()?.number ?: 0).toString().length + 1)).toDp() }
+      val density = LocalDensity.current
+      val charWidth = remember(style, density.fontScale, density.density) {
+        measurer.measure("0", style, maxLines = 1, softWrap = false).size.width.toFloat()
+      }
+      val longest = remember(parsed) { (parsed.maxOfOrNull { it.text.length } ?: 0).coerceAtMost(MAX_LOG_COLUMNS) }
+      val maxLineNumber = remember(parsed) { parsed.maxOfOrNull { it.number ?: 0 } ?: 0 }
+      val hasLineNumbers = maxLineNumber > 0
+      val numberWidth = remember(style, maxLineNumber, density.fontScale, density.density) {
+        if (maxLineNumber <= 0) 0.dp
+        else {
+          val sample = "8".repeat(maxLineNumber.toString().length.coerceAtLeast(2))
+          with(density) { measurer.measure(sample, style, maxLines = 1, softWrap = false).size.width.toDp() } + 4.dp
+        }
+      }
+      val maxTimestampChars = remember(parsed) { parsed.maxOfOrNull { it.timestamp?.length ?: 0 } ?: 0 }
+      val timestampWidth = remember(style, maxTimestampChars, density.fontScale, density.density) {
+        val sample = "0".repeat(maxTimestampChars.coerceAtLeast(12))
+        with(density) { measurer.measure(sample, style, maxLines = 1, softWrap = false).size.width.toDp() } + 4.dp
+      }
+      val contentWidth = numberWidth +
+        (if (hasLineNumbers) 12.dp else 0.dp) +
+        (if (timestamps) timestampWidth + 8.dp else 0.dp) +
+        with(density) { (charWidth * (longest + 4)).toDp() } + 32.dp
       Column(modifier.fillMaxWidth().background(JobConsoleBackground)) {
         Row(
           Modifier.fillMaxWidth().background(Color(0xFF242329)).padding(start = 16.dp, end = 4.dp),
@@ -559,6 +598,21 @@ private fun JobLog(state: JobDetailState, onRetryLoad: () -> Unit, modifier: Mod
         ) {
           Text("Job log", style = Gl.type.label, color = JobConsoleForeground)
           Spacer(Modifier.weight(1f))
+          if (isRunning) {
+            TextButton(
+              onClick = {
+                val next = !follow
+                follow = next
+                if (next && total > 0) scope.launch { listState.scrollToItem(total - 1) }
+              },
+              modifier = Modifier.testTag("follow_log").semantics {
+                selected = follow
+                contentDescription = if (follow) "Stop following log" else "Follow log"
+              },
+            ) {
+              Text("Follow", style = Gl.type.meta, color = if (follow) Color(0xFF5797FF) else JobConsoleMuted)
+            }
+          }
           TextButton(onClick = { timestamps = !timestamps }, modifier = Modifier.semantics { contentDescription = if (timestamps) "Hide timestamps" else "Show timestamps" }) {
             Text("Time", style = Gl.type.meta, color = if (timestamps) Color(0xFF5797FF) else JobConsoleMuted)
           }
@@ -570,42 +624,91 @@ private fun JobLog(state: JobDetailState, onRetryLoad: () -> Unit, modifier: Mod
           val viewportWidth = maxWidth
           val horizontal = rememberScrollState()
           Box(Modifier.fillMaxSize().then(if (wrap) Modifier else Modifier.horizontalScroll(horizontal))) {
-            LazyColumn(
-              state = listState,
-              modifier = Modifier.width(if (wrap) viewportWidth else contentWidth.coerceAtLeast(viewportWidth)).fillMaxHeight(),
-              contentPadding = PaddingValues(top = 10.dp, bottom = 20.dp),
-            ) {
-              if (trace.truncated) {
-                item(key = "truncated") {
-                  Text("Showing the last 256 KB. Open in the browser for the full log.", style = Gl.type.meta, color = JobConsoleMuted, modifier = Modifier.padding(16.dp))
+            SelectionContainer {
+              LazyColumn(
+                state = listState,
+                modifier = Modifier.width(if (wrap) viewportWidth else contentWidth.coerceAtLeast(viewportWidth)).fillMaxHeight(),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 20.dp),
+              ) {
+                if (trace.truncated) {
+                  item(key = "truncated") {
+                    DisableSelection {
+                      val banner = when {
+                        trace.earlierLines != null && trace.earlierLines > 0 ->
+                          "… ${trace.earlierLines} earlier ${if (trace.earlierLines == 1) "line" else "lines"} truncated. Open in the browser for the full log."
+                        trace.startOffset > 0 ->
+                          "… earlier output truncated (${formatBytes(trace.startOffset)} earlier). Open in the browser for the full log."
+                        else ->
+                          "… earlier output truncated (showing the last 256 KB). Open in the browser for the full log."
+                      }
+                      Text(banner, style = Gl.type.meta, color = JobConsoleMuted, modifier = Modifier.padding(16.dp))
+                    }
+                  }
                 }
-              }
-              itemsIndexed(visible, key = { _, line -> line.number }) { _, line ->
-                val section = line.sectionKey
-                val isCollapsed = section in collapsed
-                Row(
-                  modifier = Modifier.fillMaxWidth()
-                    .then(if (section != null) Modifier.background(Color(0xFF242329)).clickable {
-                      overrides = overrides + (section to !isCollapsed)
-                    }.semantics { contentDescription = if (isCollapsed) "Expand log section" else "Collapse log section" } else Modifier)
-                    .padding(horizontal = 12.dp, vertical = if (section != null) 6.dp else 1.dp),
-                  verticalAlignment = Alignment.Top,
-                ) {
-                  Text(line.number.toString(), style = style, color = JobConsoleMuted, textAlign = TextAlign.End, modifier = Modifier.width(numberWidth))
-                  Spacer(Modifier.width(12.dp))
-                  if (timestamps) {
-                    Text(line.timestamp.orEmpty(), style = style, color = JobConsoleMuted, modifier = Modifier.width(100.dp))
-                    Spacer(Modifier.width(8.dp))
-                  }
-                  if (section != null) {
-                    Text(if (isCollapsed) "▸ " else "▾ ", style = style, color = JobConsoleMuted)
-                  }
-                  SelectionContainer(Modifier.weight(1f)) {
+                itemsIndexed(visible, key = { _, line -> line.byteOffset }) { _, line ->
+                  val section = line.sectionKey
+                  val isCollapsed = section in collapsed
+                  val sectionTitle = line.text.text.trim()
+                  Row(
+                    modifier = Modifier.fillMaxWidth()
+                      .then(
+                        if (section != null) {
+                          Modifier
+                            .heightIn(min = GlSpace.touch)
+                            .background(Color(0xFF242329))
+                            .clickable(
+                              role = Role.Button,
+                              onClickLabel = if (isCollapsed) "Expand section" else "Collapse section",
+                            ) { overrides = overrides + (section to !isCollapsed) }
+                            .semantics(mergeDescendants = true) {
+                              contentDescription = buildString {
+                                append(if (isCollapsed) "Expand section" else "Collapse section")
+                                if (sectionTitle.isNotEmpty()) append(": ").append(sectionTitle)
+                              }
+                            }
+                        } else Modifier
+                      )
+                      .padding(horizontal = 12.dp, vertical = if (section != null) 6.dp else 1.dp),
+                    verticalAlignment = if (section != null) Alignment.CenterVertically else Alignment.Top,
+                  ) {
+                    if (hasLineNumbers) {
+                      DisableSelection {
+                        Text(
+                          text = line.number?.toString().orEmpty(),
+                          style = style,
+                          color = JobConsoleMuted,
+                          textAlign = TextAlign.End,
+                          maxLines = 1,
+                          softWrap = false,
+                          modifier = Modifier.width(numberWidth),
+                        )
+                      }
+                      Spacer(Modifier.width(12.dp))
+                    }
+                    if (timestamps) {
+                      DisableSelection {
+                        Text(
+                          text = line.timestamp.orEmpty(),
+                          style = style,
+                          color = JobConsoleMuted,
+                          maxLines = 1,
+                          softWrap = false,
+                          modifier = Modifier.width(timestampWidth),
+                        )
+                      }
+                      Spacer(Modifier.width(8.dp))
+                    }
+                    if (section != null) {
+                      DisableSelection {
+                        Text(if (isCollapsed) "▸ " else "▾ ", style = style, color = JobConsoleMuted)
+                      }
+                    }
                     Text(
-                      text = if (line.text.isEmpty()) AnnotatedString(" ") else line.text,
+                      text = jobTraceDisplayText(line.text, wrapped = wrap),
                       style = if (section != null) style.copy(fontWeight = FontWeight.Bold) else style,
                       color = JobConsoleForeground,
                       softWrap = wrap,
+                      modifier = Modifier.weight(1f),
                     )
                   }
                 }
@@ -617,7 +720,12 @@ private fun JobLog(state: JobDetailState, onRetryLoad: () -> Unit, modifier: Mod
             text = "Jump to end",
             icon = Icons.Outlined.KeyboardDoubleArrowDown,
             kind = GlButtonKind.Secondary,
-            onClick = { scope.launch { if (total > 0) listState.animateScrollToItem(total - 1) } },
+            onClick = {
+              scope.launch {
+                if (total > 0) listState.animateScrollToItem(total - 1)
+                if (isRunning) follow = true
+              }
+            },
             modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(GlSpace.margin),
           )
         }

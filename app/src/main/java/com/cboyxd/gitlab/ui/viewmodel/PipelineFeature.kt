@@ -8,10 +8,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.min
 
 private val ACTIVE = setOf("running", "pending", "created", "preparing", "waiting_for_resource", "scheduled", "canceling")
@@ -53,6 +54,17 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
     if (destination !is ScreenDestination.JobDetail) jobJob?.cancel()
   }
 
+  /** Waits up to [delayMs] in the foreground; if backgrounded, pauses until foreground returns and refreshes at once. */
+  private suspend fun awaitNextPoll(delayMs: Long) {
+    val backgrounded = withTimeoutOrNull(delayMs) {
+      host.foreground.first { !it }
+      true
+    } ?: false
+    if (backgrounded) {
+      host.foreground.first { it }
+    }
+  }
+
   /** Runs a pipeline on [ref], opens it, and lets [onResult] know (null on success, else the reason). */
   fun runPipeline(projectId: Long, ref: String, onResult: (String?) -> Unit) {
     host.session.launch {
@@ -89,6 +101,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
       var lastKnown = knownPipelineStatus
       var failures = 0
       while (true) {
+        host.foreground.first { it }
         val (pipeline, jobs) = coroutineScope {
           val summary = async { host.api { host.repository.getPipeline(it, projectId, pipelineId) } }
           val list = async { host.api { host.repository.getPipelineJobs(it, projectId, pipelineId) } }
@@ -103,7 +116,8 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         }
         pipeline.getOrNull()?.let { lastKnown = it.status }
         failures = if (pipeline.isFailure) failures + 1 else 0
-        delay(LivePolling.next(pipeline.map { it.status }, lastKnown, failures) ?: break)
+        val delayMs = LivePolling.next(pipeline.map { it.status }, lastKnown, failures) ?: break
+        awaitNextPoll(delayMs)
       }
     }
   }
@@ -127,6 +141,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
       var lastKnown = knownJobStatus
       var failures = 0
       while (true) {
+        host.foreground.first { it }
         val (job, trace) = coroutineScope {
           val summary = async { host.api { host.repository.getJob(it, projectId, jobId) } }
           val log = async { host.api { host.repository.getJobTrace(it, projectId, jobId) } }
@@ -141,7 +156,8 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         }
         job.getOrNull()?.let { lastKnown = it.status }
         failures = if (job.isFailure) failures + 1 else 0
-        delay(LivePolling.next(job.map { it.status }, lastKnown, failures) ?: break)
+        val delayMs = LivePolling.next(job.map { it.status }, lastKnown, failures) ?: break
+        awaitNextPoll(delayMs)
       }
     }
   }

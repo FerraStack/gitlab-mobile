@@ -74,11 +74,17 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   private var searchJob: Job? = null
   private var issueJob: Job? = null
   private var navigationJob: Job? = null
+  private val _foreground = MutableStateFlow(true)
+
+  fun setForeground(foreground: Boolean) {
+    _foreground.value = foreground
+  }
 
   private val host = object : SessionHost {
     override val repository: GitLabRepository get() = this@GitLabViewModel.repository
     override val session: CoroutineScope get() = this@GitLabViewModel.session
     override val state: MutableStateFlow<GitLabUiState> get() = _uiState
+    override val foreground: StateFlow<Boolean> get() = _foreground.asStateFlow()
     override suspend fun <T> api(block: suspend (GitLabInstance) -> Result<T>): Result<T> = this@GitLabViewModel.api(block)
     override fun notify(text: String) {
       this@GitLabViewModel.notify(text)

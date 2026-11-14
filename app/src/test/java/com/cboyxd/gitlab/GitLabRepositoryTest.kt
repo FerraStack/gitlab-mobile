@@ -218,6 +218,57 @@ class GitLabRepositoryTest {
 
     assertTrue(trace.truncated)
     assertEquals("step 2\nEND\n", trace.text)
+    assertEquals(744009L, trace.startOffset)
+    assertEquals(null, trace.earlierLines)
+  }
+
+  @Test
+  fun `a truncated full log reports exact earlier line count and byte offset`() = runBlocking {
+    val lines = (1..10_000).map { "line $it: ${"x".repeat(25)}\n" }
+    val body = lines.joinToString("")
+    val totalBytes = body.toByteArray().size.toLong()
+    server.enqueue(MockResponse().setBody(body))
+
+    val trace = repository.getJobTrace(instance, 1, 2).getOrThrow()
+
+    assertTrue(trace.truncated)
+    assertTrue(trace.earlierLines != null && trace.earlierLines!! > 0)
+    assertEquals(totalBytes - trace.text.toByteArray().size.toLong(), trace.startOffset)
+    assertTrue(trace.text.startsWith("line "))
+    assertEquals(10_000 - trace.earlierLines!!, trace.text.lineSequence().count { it.isNotEmpty() })
+  }
+
+  @Test
+  fun `a ranged tail with a partial line longer than 64 KB still cuts at the next newline`() = runBlocking {
+    val partial = "x".repeat(80_000) + "\n"
+    server.enqueue(
+      MockResponse().setResponseCode(206)
+        .addHeader("Content-Range", "bytes 500000-580011/580012")
+        .setBody("${partial}step 2\nEND\n"),
+    )
+
+    val trace = repository.getJobTrace(instance, 1, 2).getOrThrow()
+
+    assertTrue(trace.truncated)
+    assertEquals("step 2\nEND\n", trace.text)
+    assertEquals(580_001L, trace.startOffset)
+  }
+
+  @Test
+  fun `a ranged tail without newlines skips split UTF-8 continuation bytes`() = runBlocking {
+    // 😀 is F0 9F 98 80; start midway at 9F 98 80 followed by "OK".
+    val bytes = okio.Buffer().write(byteArrayOf(0x9F.toByte(), 0x98.toByte(), 0x80.toByte(), 'O'.code.toByte(), 'K'.code.toByte()))
+    server.enqueue(
+      MockResponse().setResponseCode(206)
+        .addHeader("Content-Range", "bytes 100-104/105")
+        .setBody(bytes),
+    )
+
+    val trace = repository.getJobTrace(instance, 1, 2).getOrThrow()
+
+    assertTrue(trace.truncated)
+    assertEquals("OK", trace.text)
+    assertEquals(103L, trace.startOffset)
   }
 
   @Test

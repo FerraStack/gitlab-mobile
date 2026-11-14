@@ -55,7 +55,12 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import javax.net.ssl.SSLException
 
-data class JobTrace(val text: String, val truncated: Boolean)
+data class JobTrace(
+  val text: String,
+  val truncated: Boolean,
+  val startOffset: Long = 0L,
+  val earlierLines: Int? = null,
+)
 
 /** One page of a list and the page after it, or null when this was the last. */
 data class ListPage<T>(val items: List<T>, val nextPage: Int?)
@@ -861,31 +866,54 @@ class GitLabRepository {
       return@call JobTrace("", truncated = false)
     }
     if (!response.isSuccessful) throw response.toGitLabException()
+    val rangeStart = if (response.code() == 206) contentRangeStart(response.headers()["Content-Range"]) ?: 0L else 0L
     // A 206 that doesn't start at byte 0 is a tail of a longer log.
-    val startsMidway = response.code() == 206 && (contentRangeStart(response.headers()["Content-Range"]) ?: 0L) > 0
+    val startsMidway = response.code() == 206 && rangeStart > 0L
     val body = response.body() ?: return@call JobTrace("", truncated = false)
     body.use {
       val source = it.source()
       val buffer = Buffer()
-      var dropped = false
+      var skippedBytes = 0L
+      var skippedNewlines = 0
+      fun dropPrefix(count: Long) {
+        if (count <= 0L) return
+        if (!startsMidway) skippedNewlines += countNewlines(buffer, count)
+        buffer.skip(count)
+        skippedBytes += count
+      }
       while (source.read(buffer, 64 * 1024L) != -1L) {
         if (buffer.size > MAX_TRACE_BYTES * 2) {
-          buffer.skip(buffer.size - MAX_TRACE_BYTES)
-          dropped = true
+          dropPrefix(buffer.size - MAX_TRACE_BYTES)
         }
       }
       if (buffer.size > MAX_TRACE_BYTES) {
-        buffer.skip(buffer.size - MAX_TRACE_BYTES)
-        dropped = true
+        dropPrefix(buffer.size - MAX_TRACE_BYTES)
       }
-      val truncated = dropped || startsMidway
+      val truncated = skippedBytes > 0L || startsMidway
       // A cut tail starts mid-line, possibly inside a UTF-8 character or an ANSI escape: start
       // at the next full line instead.
       if (truncated) {
-        val newline = buffer.indexOf('\n'.code.toByte(), 0, minOf(buffer.size, 64 * 1024L))
-        if (newline >= 0) buffer.skip(newline + 1)
+        val newline = buffer.indexOf('\n'.code.toByte())
+        if (newline >= 0) {
+          dropPrefix(newline + 1)
+        } else {
+          // No newline in the whole window (one giant line): skip any split UTF-8 continuation bytes.
+          var continuation = 0L
+          while (continuation < buffer.size && continuation < 4L && (buffer[continuation].toInt() and 0xC0) == 0x80) {
+            continuation++
+          }
+          if (continuation > 0L) {
+            buffer.skip(continuation)
+            skippedBytes += continuation
+          }
+        }
       }
-      JobTrace(buffer.readUtf8(), truncated = truncated)
+      JobTrace(
+        text = buffer.readUtf8(),
+        truncated = truncated,
+        startOffset = rangeStart + skippedBytes,
+        earlierLines = if (truncated && !startsMidway) skippedNewlines else null,
+      )
     }
   }
 
@@ -1102,6 +1130,19 @@ internal fun withoutDraftPrefix(title: String): String = title.replace(DRAFT_PRE
 /** The first byte of a `Content-Range: bytes 1000-1999/2000` header, or null. */
 internal fun contentRangeStart(header: String?): Long? =
   header?.trim()?.removePrefix("bytes")?.trim()?.substringBefore('-')?.toLongOrNull()
+
+private fun countNewlines(buffer: Buffer, upTo: Long): Int {
+  var lines = 0
+  var pos = 0L
+  val limit = minOf(upTo, buffer.size)
+  while (pos < limit) {
+    val nl = buffer.indexOf('\n'.code.toByte(), pos, limit)
+    if (nl < 0) break
+    lines++
+    pos = nl + 1
+  }
+  return lines
+}
 
 internal fun Throwable.toApiException(): Throwable = when (this) {
   is GitLabApiException -> this
