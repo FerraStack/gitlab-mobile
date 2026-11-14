@@ -11,6 +11,7 @@ import com.cboyxd.gitlab.data.api.formatGitLabTime
 import com.cboyxd.gitlab.data.auth.GitLabAuth
 import com.cboyxd.gitlab.data.auth.GitLabAuthException
 import com.cboyxd.gitlab.data.auth.GitLabSessionTokens
+import com.cboyxd.gitlab.data.auth.GitLabTokenRevoker
 import com.cboyxd.gitlab.data.auth.GitLabOAuth
 import com.cboyxd.gitlab.data.auth.GitLabPasswordLogin
 import com.cboyxd.gitlab.data.auth.PasswordLoginOutcome
@@ -424,13 +425,13 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       if (current?.id == instanceId && current.version.isBlank()) api { repository.getVersion(it) }.getOrNull() else null
     } else null
     val updated = runStorage {
-      val latest = store.getInstances().firstOrNull { it.id == instanceId } ?: return@runStorage null
-      val patched = latest.copy(
-        username = username?.takeIf { it.isNotBlank() } ?: latest.username,
-        version = version?.takeIf { it.isNotBlank() } ?: latest.version,
-        statusOk = reachable && !authFailed
-      )
-      if (patched != latest) store.updateInstance(patched)
+      store.patch(instanceId) { latest ->
+        latest.copy(
+          username = username?.takeIf { it.isNotBlank() } ?: latest.username,
+          version = version?.takeIf { it.isNotBlank() } ?: latest.version,
+          statusOk = reachable && !authFailed
+        )
+      } ?: return@runStorage null
       store.getInstances() to store.getActiveInstance()
     }.getOrNull() ?: return
     publishInstances(updated.first, updated.second)
@@ -491,6 +492,9 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun deleteInstance(instanceId: String) {
+    val snapshot = _uiState.value.savedInstances.firstOrNull { it.id == instanceId }
+      ?: _uiState.value.activeInstance?.takeIf { it.id == instanceId }
+    val fallbackClientId = _uiState.value.gitLabComClientId
     val wasActive = _uiState.value.activeInstance?.id == instanceId
     if (wasActive) {
       resetSession()
@@ -499,13 +503,21 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     GitLabApiClient.forget(instanceId)
     viewModelScope.launch {
       runStorage {
+        val removed = store.getInstances().firstOrNull { it.id == instanceId } ?: snapshot
+        val clientId = fallbackClientId.ifBlank { store.getGitLabComClientId() }
         store.deleteInstance(instanceId)
-        store.getInstances() to store.getActiveInstance()
+        Triple(removed, store.getInstances(), store.getActiveInstance() to clientId)
       }.fold(
-        onSuccess = { (instances, active) ->
+        onSuccess = { (removed, instances, activeAndClient) ->
+          val (active, clientId) = activeAndClient
           publishInstances(instances, active)
           notify("Account removed")
           if (wasActive) refreshDashboard()
+          if (removed != null && removed.token.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+              GitLabTokenRevoker.revoke(removed, fallbackClientId = clientId)
+            }
+          }
         },
         onFailure = { error -> notifyError(error.message ?: "Unable to remove the account.") }
       )
@@ -591,17 +603,18 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
 
   /** Connects without credentials to browse public projects. Nothing can be changed in this mode. */
   fun completeOAuthRedirect(uri: Uri) {
+    val state = uri.getQueryParameter("state")
+    if (state.isNullOrBlank()) return
     viewModelScope.launch {
-      val pending = runStorage { GitLabOAuth.consumePending(getApplication()) }.getOrNull() ?: return@launch
+      val pending = runStorage { GitLabOAuth.consumePendingIfStateMatches(getApplication(), state) }.getOrNull() ?: return@launch
       val error = uri.getQueryParameter("error_description") ?: uri.getQueryParameter("error")
-      val state = uri.getQueryParameter("state")
       val code = uri.getQueryParameter("code")
       if (!error.isNullOrBlank()) {
         _uiState.update { it.copy(loginState = LoginState(isError = true, message = error)) }
         notifyError(error)
         return@launch
       }
-      if (state != pending.state || code.isNullOrBlank()) {
+      if (code.isNullOrBlank()) {
         val message = "GitLab sign-in didn't finish. Try again from Add account."
         _uiState.update { it.copy(loginState = LoginState(isError = true, message = message)) }
         notifyError(message)
@@ -689,12 +702,21 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       repository.testConnection(draft).fold(
         onSuccess = { probe ->
           passwordLogin = null
+          val fallbackClientId = _uiState.value.gitLabComClientId
           val saved = runStorage {
-            val added = store.addInstance(draft.copy(username = probe.username, version = probe.version, statusOk = true))
-            Triple(added, store.getInstances(), store.getActiveInstance())
+            val candidate = draft.copy(username = probe.username, version = probe.version, statusOk = true)
+            val replaced = store.findExistingAccount(candidate)
+            val added = store.addInstance(candidate)
+            val clientId = fallbackClientId.ifBlank { store.getGitLabComClientId() }
+            SavedAccountResult(added, store.getInstances(), store.getActiveInstance(), replaced, clientId)
           }
           saved.fold(
-            onSuccess = { (added, instances, active) ->
+            onSuccess = { result ->
+              val added = result.added
+              val instances = result.instances
+              val active = result.active
+              val replaced = result.replaced
+              val clientId = result.clientId
               resetSession()
               GitLabApiClient.forget(added.id)
               _uiState.update {
@@ -708,6 +730,11 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
               }
               notify(if (added.token.isBlank()) "Connected to ${added.name} without signing in" else "Signed in to ${added.name}")
               refreshDashboard()
+              if (replaced != null && replaced.token.isNotBlank() && replaced.token != added.token) {
+                viewModelScope.launch(Dispatchers.IO) {
+                  GitLabTokenRevoker.revoke(replaced, fallbackClientId = clientId)
+                }
+              }
             },
             onFailure = { error ->
               _uiState.update { it.copy(loginState = LoginState(isError = true, message = error.message ?: "Unable to save the account.")) }
@@ -749,12 +776,14 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       }
       return current
     }
-    _uiState.update { state ->
-      state.copy(
-        activeInstance = if (state.activeInstance?.id == updated.id) updated else state.activeInstance,
-        savedInstances = state.savedInstances.map { if (it.id == updated.id) updated else it },
-        sessionExpired = if (state.activeInstance?.id == updated.id && updated.token != current.token) false else state.sessionExpired,
-      )
+    if (updated != current) {
+      _uiState.update { state ->
+        state.copy(
+          activeInstance = if (state.activeInstance?.id == updated.id) updated else state.activeInstance,
+          savedInstances = state.savedInstances.map { if (it.id == updated.id) updated else it },
+          sessionExpired = if (state.activeInstance?.id == updated.id && updated.token != current.token) false else state.sessionExpired,
+        )
+      }
     }
     return updated.takeIf { _uiState.value.activeInstance?.id == current.id }
   }
@@ -1194,3 +1223,11 @@ private fun GitLabTodo.toNotification(): GitLabNotification {
  */
 internal fun mergeRequestReadyToOpen(d: MergeRequestDetailState): Boolean =
   d.mergeRequest.error != null || (d.mergeRequest.loaded && d.mergeRequest.data != null)
+
+private data class SavedAccountResult(
+  val added: GitLabInstance,
+  val instances: List<GitLabInstance>,
+  val active: GitLabInstance?,
+  val replaced: GitLabInstance?,
+  val clientId: String,
+)

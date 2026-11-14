@@ -7,12 +7,14 @@ import android.net.Uri
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
 import com.cboyxd.gitlab.IncomingLinks
-import com.cboyxd.gitlab.viewResolvesToThisApp
+import com.cboyxd.gitlab.data.api.GitLabApiClient
 import com.cboyxd.gitlab.data.storage.AndroidKeyStoreSecretStore
+import com.cboyxd.gitlab.viewResolvesToThisApp
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 data class PendingOAuth(
@@ -30,6 +32,13 @@ object GitLabOAuth {
   private const val KEY_NAME = "name"
   private const val KEY_CLIENT = "client_id"
   private const val KEY_BASE = "base_url"
+
+  private val defaultTokenClient: OkHttpClient by lazy {
+    configureTokenClient(GitLabApiClient.baseHttpClient.newBuilder()).build()
+  }
+
+  @Volatile
+  private var cachedOverride: Pair<OkHttpClient, OkHttpClient>? = null
 
   fun begin(name: String, clientId: String, baseUrl: String = "https://gitlab.com"): PendingOAuth = PendingOAuth(
     state = GitLabAuth.randomVerifier(),
@@ -51,20 +60,38 @@ object GitLabOAuth {
     secrets.put(KEY_BASE, pending.baseUrl)
   }
 
-  fun consumePending(context: Context): PendingOAuth? {
+  fun peekPending(context: Context): PendingOAuth? {
     val secrets = AndroidKeyStoreSecretStore(context, PREFS)
     val state = secrets.get(KEY_STATE)
     val verifier = secrets.get(KEY_VERIFIER)
     val clientId = secrets.get(KEY_CLIENT)
     if (state.isNullOrBlank() || verifier.isNullOrBlank() || clientId.isNullOrBlank()) return null
-    val pending = PendingOAuth(
+    return PendingOAuth(
       state = state,
       verifier = verifier,
       name = secrets.get(KEY_NAME).orEmpty().ifBlank { "GitLab.com" },
       clientId = clientId,
       baseUrl = secrets.get(KEY_BASE).orEmpty().ifBlank { "https://gitlab.com" }
     )
-    secrets.clear()
+  }
+
+  fun consumePending(context: Context): PendingOAuth? {
+    val pending = peekPending(context) ?: return null
+    AndroidKeyStoreSecretStore(context, PREFS).clear()
+    return pending
+  }
+
+  /**
+   * Returns and clears the pending sign-in only when [state] matches its saved OAuth state, so
+   * unsolicited redirects cannot cancel an in-progress sign-in or spoof errors.
+   */
+  fun consumePendingIfStateMatches(context: Context, state: String?): PendingOAuth? {
+    if (state.isNullOrBlank()) return null
+    val pending = peekPending(context) ?: return null
+    if (!MessageDigest.isEqual(state.toByteArray(Charsets.UTF_8), pending.state.toByteArray(Charsets.UTF_8))) {
+      return null
+    }
+    AndroidKeyStoreSecretStore(context, PREFS).clear()
     return pending
   }
 
@@ -103,6 +130,44 @@ object GitLabOAuth {
     return postToken(baseUrl, body, http)
   }
 
+  /** Best-effort RFC 7009 revocation of OAuth tokens on account removal or replacement. */
+  fun revoke(
+    baseUrl: String,
+    clientId: String,
+    token: String,
+    refreshToken: String = "",
+    http: OkHttpClient = tokenClient(),
+  ): Boolean {
+    val root = runCatching { GitLabAuth.rootUrl(baseUrl) }.getOrNull() ?: return false
+    var anyAttempted = false
+    var allSucceeded = true
+    val targets = buildList {
+      if (refreshToken.isNotBlank()) add(refreshToken to "refresh_token")
+      if (token.isNotBlank() && token != refreshToken) add(token to "access_token")
+    }
+    for ((secret, hint) in targets) {
+      anyAttempted = true
+      val form = FormBody.Builder().apply {
+        if (clientId.isNotBlank()) add("client_id", clientId)
+        add("token", secret)
+        add("token_type_hint", hint)
+      }.build()
+      val request = Request.Builder()
+        .url("$root/oauth/revoke")
+        .header("Accept", "application/json")
+        .header("User-Agent", "GitLabMobile/1.0 (Android)")
+        .post(form)
+        .build()
+      val ok = try {
+        http.newCall(request).execute().use { it.isSuccessful }
+      } catch (_: IOException) {
+        false
+      }
+      if (!ok) allSucceeded = false
+    }
+    return anyAttempted && allSucceeded
+  }
+
   private fun postToken(baseUrl: String, body: FormBody, http: OkHttpClient): OAuthTokenSet {
     val request = Request.Builder()
       .url(GitLabAuth.rootUrl(baseUrl) + "/oauth/token")
@@ -128,9 +193,17 @@ object GitLabOAuth {
   }
 
   // Tests reach MockWebServer through the API client's override (it trusts the test certificate).
-  private fun tokenClient(): OkHttpClient = (com.cboyxd.gitlab.data.api.GitLabApiClient.clientOverride?.newBuilder() ?: OkHttpClient.Builder())
-    .connectTimeout(20, TimeUnit.SECONDS)
-    .readTimeout(30, TimeUnit.SECONDS)
-    .writeTimeout(30, TimeUnit.SECONDS)
-    .build()
+  internal fun tokenClient(): OkHttpClient {
+    val override = GitLabApiClient.clientOverride ?: return defaultTokenClient
+    cachedOverride?.takeIf { it.first === override }?.let { return it.second }
+    val built = configureTokenClient(override.newBuilder()).build()
+    cachedOverride = override to built
+    return built
+  }
+
+  private fun configureTokenClient(builder: OkHttpClient.Builder): OkHttpClient.Builder = builder
+    .connectTimeout(15, TimeUnit.SECONDS)
+    .readTimeout(20, TimeUnit.SECONDS)
+    .writeTimeout(20, TimeUnit.SECONDS)
+    .callTimeout(30, TimeUnit.SECONDS)
 }

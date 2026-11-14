@@ -100,6 +100,7 @@ class GitLabPasswordLogin(
       }
       val csrf = GitLabAuth.csrfToken(page.body)
         ?: return PasswordLoginOutcome.Failed("Signed in, but the token page could not be read.")
+      revokeExistingTokens(path, page.body, csrf)
       val created = requestToken(path, csrf, GitLabAuth.tokenExpiryDate(364))
       created.token?.let { return PasswordLoginOutcome.TokenReady(it) }
       if (created.sessionLost) return PasswordLoginOutcome.Failed("GitLab did not keep the sign-in session.")
@@ -194,6 +195,30 @@ class GitLabPasswordLogin(
     return execute(builder.build())
   }
 
+  private fun revokeExistingTokens(pageUrl: String, pageBody: String, csrf: String) {
+    val pagePath = pageUrl.removePrefix(root).ifBlank { "/-/user_settings/personal_access_tokens" }
+    val revokePaths = GitLabAuth.revokePathsForToken(pageBody, TOKEN_NAME, pagePath)
+    for (revokePath in revokePaths) {
+      val target = GitLabAuth.resolveUrl(root, revokePath)
+      if (!sameServer(target)) continue
+      runCatching { put(target, referer = pageUrl, csrf = csrf) }
+    }
+  }
+
+  private fun put(url: String, referer: String, csrf: String): Fetched {
+    val request = Request.Builder()
+      .url(url)
+      .header("User-Agent", USER_AGENT)
+      .header("Accept", "application/json,text/html")
+      .header("Referer", referer)
+      .header("Origin", root)
+      .header("X-CSRF-Token", csrf)
+      .header("X-Requested-With", "XMLHttpRequest")
+      .put("".toRequestBody(null))
+      .build()
+    return execute(request)
+  }
+
   private fun postJson(url: String, csrf: String, json: String): Fetched {
     val request = Request.Builder()
       .url(url)
@@ -236,6 +261,7 @@ class GitLabPasswordLogin(
   )
 
   companion object {
+    private const val TOKEN_NAME = "gitlab-mobile"
     private const val USER_AGENT = "GitLabMobile/1.0 (Android)"
     private val JSON = "application/json; charset=utf-8".toMediaType()
 

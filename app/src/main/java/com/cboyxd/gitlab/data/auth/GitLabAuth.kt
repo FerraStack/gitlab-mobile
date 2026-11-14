@@ -138,6 +138,83 @@ object GitLabAuth {
 
   fun expiryRejected(body: String): Boolean = body.lowercase(Locale.US).contains("expir")
 
+  /**
+   * Finds revoke URLs or paths for any active token named [tokenName] embedded in GitLab's
+   * personal access tokens page (both Vue/JSON payloads and legacy HTML tables).
+   */
+  fun revokePathsForToken(
+    html: String,
+    tokenName: String = "gitlab-mobile",
+    pagePath: String = "/-/user_settings/personal_access_tokens",
+  ): List<String> {
+    if (!html.contains(tokenName, ignoreCase = false)) return emptyList()
+    val results = LinkedHashSet<String>()
+    val normalizedPage = pagePath.trimEnd('/')
+    val namePattern = Regex(""""name"\s*:\s*"${Regex.escape(tokenName)}"""")
+    val revokedTrue = Regex(""""revoked"\s*:\s*true\b""")
+    val activeFalse = Regex(""""active"\s*:\s*false\b""")
+    val revokePathPattern = Regex(""""revoke_path"\s*:\s*"([^"\\]+)"""")
+    val idPattern = Regex(""""id"\s*:\s*(\d+)""")
+    val tokenMarkers = Regex(""""(?:scopes|expires_at|created_at|last_used_at|revoked|revoke_path)"\s*:""")
+
+    for (candidate in listOf(html, decodeHtml(html))) {
+      var index = 0
+      while (index < candidate.length) {
+        val start = candidate.indexOf('{', index)
+        if (start < 0) break
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var end = -1
+        var cursor = start
+        while (cursor < candidate.length) {
+          val ch = candidate[cursor]
+          if (escaped) {
+            escaped = false
+          } else if (ch == '\\' && inString) {
+            escaped = true
+          } else if (ch == '"') {
+            inString = !inString
+          } else if (!inString) {
+            if (ch == '{') depth++
+            else if (ch == '}') {
+              depth--
+              if (depth == 0) {
+                end = cursor
+                break
+              }
+            }
+          }
+          cursor++
+        }
+        if (end < 0) break
+        val obj = candidate.substring(start, end + 1)
+        if (namePattern.containsMatchIn(obj) && !revokedTrue.containsMatchIn(obj) && !activeFalse.containsMatchIn(obj)) {
+          val explicit = revokePathPattern.find(obj)?.groupValues?.get(1)?.replace("\\/", "/")
+          if (!explicit.isNullOrBlank()) {
+            results += explicit
+          } else if (tokenMarkers.containsMatchIn(obj)) {
+            val id = idPattern.find(obj)?.groupValues?.get(1)
+            if (!id.isNullOrBlank()) results += "$normalizedPage/$id/revoke"
+          }
+        }
+        index = start + 1
+      }
+    }
+
+    val rowRegex = Regex("""<tr\b[^>]*>.*?</tr>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    val tokenCellRegex = Regex("""(^|\s)${Regex.escape(tokenName)}(\s|$)""")
+    val hrefRevokeRegex = Regex("""\b(?:href|action)=["']([^"']*personal_access_tokens/\d+/revoke[^"']*)["']""", RegexOption.IGNORE_CASE)
+    rowRegex.findAll(html).forEach { rowMatch ->
+      val row = rowMatch.value
+      val text = decodeHtml(row.replace(Regex("<[^>]+>"), " "))
+      if (tokenCellRegex.containsMatchIn(text)) {
+        hrefRevokeRegex.find(row)?.groupValues?.get(1)?.let { results += decodeHtml(it) }
+      }
+    }
+    return results.toList()
+  }
+
   fun parseOAuthTokens(body: String, nowEpochSec: Long = System.currentTimeMillis() / 1000): OAuthTokenSet {
     val access = jsonString(body, "access_token")
       ?: throw GitLabAuthException(accessError(body) ?: "GitLab did not return an access token.")
