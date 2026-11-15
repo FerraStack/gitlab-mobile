@@ -27,14 +27,16 @@ import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicInteger
 
 class GitLabNotificationWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-  override suspend fun doWork(): Result = try {
-    if (!GitLabNotifications.allowed(applicationContext)) return Result.success()
-    val trigger = if (GitLabNotifications.TAG_ONE_TIME in tags) PollTrigger.ONE_TIME else PollTrigger.PERIODIC
-    if (GitLabNotificationMonitor.poll(applicationContext, trigger)) Result.success() else Result.retry()
-  } catch (cancel: CancellationException) {
-    throw cancel
-  } catch (_: Exception) {
-    Result.retry()
+  override suspend fun doWork(): Result {
+    return try {
+      if (!GitLabNotifications.allowed(applicationContext)) return Result.success()
+      val trigger = if (GitLabNotifications.TAG_ONE_TIME in tags) PollTrigger.ONE_TIME else PollTrigger.PERIODIC
+      if (GitLabNotificationMonitor.poll(applicationContext, trigger)) Result.success() else Result.retry()
+    } catch (cancel: CancellationException) {
+      throw cancel
+    } catch (_: Exception) {
+      Result.retry()
+    }
   }
 }
 
