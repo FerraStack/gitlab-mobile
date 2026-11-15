@@ -80,10 +80,10 @@ class PipelinePollingTest {
     server.shutdown()
   }
 
-  private fun TestScope.newHarness(): Triple<PipelineFeature, MutableStateFlow<Boolean>, java.util.concurrent.LinkedBlockingQueue<Unit>> {
+  private fun TestScope.newHarness(): Triple<PipelineFeature, MutableStateFlow<Boolean>, AtomicInteger> {
     val dispatcher = StandardTestDispatcher(testScheduler)
     val foreground = MutableStateFlow(true)
-    val callEvents = java.util.concurrent.LinkedBlockingQueue<Unit>()
+    val completedCalls = AtomicInteger(0)
     val host = object : SessionHost {
       override val repository = GitLabRepository()
       override val session = CoroutineScope(dispatcher + SupervisorJob())
@@ -91,7 +91,7 @@ class PipelinePollingTest {
       override val foreground: StateFlow<Boolean> = foreground.asStateFlow()
       override suspend fun <T> api(block: suspend (GitLabInstance) -> Result<T>): Result<T> {
         val result = block(instance)
-        callEvents.offer(Unit)
+        completedCalls.incrementAndGet()
         return result
       }
       override fun notify(text: String) = Unit
@@ -99,24 +99,27 @@ class PipelinePollingTest {
       override fun navigateTo(destination: ScreenDestination) = Unit
       override fun openExternal(url: String) = Unit
     }
-    return Triple(PipelineFeature(host), foreground, callEvents)
+    return Triple(PipelineFeature(host), foreground, completedCalls)
   }
 
-  private fun TestScope.awaitNewCalls(callEvents: java.util.concurrent.LinkedBlockingQueue<Unit>, count: Int) {
-    runCurrent()
-    repeat(count) {
-      val event = callEvents.poll(5, java.util.concurrent.TimeUnit.SECONDS)
-      org.junit.Assert.assertNotNull("Timed out waiting for API call", event)
+  private fun TestScope.awaitCalls(completedCalls: AtomicInteger, expectedTotal: Int) {
+    val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+    while (completedCalls.get() < expectedTotal && System.nanoTime() < deadline) {
+      runCurrent()
+      if (completedCalls.get() < expectedTotal) {
+        Thread.sleep(5)
+      }
     }
     runCurrent()
+    assertEquals(expectedTotal, completedCalls.get())
   }
 
   @Test
   fun `pipeline polling pauses in background and refreshes on return`() = runTest {
-    val (feature, foreground, callEvents) = newHarness()
+    val (feature, foreground, completedCalls) = newHarness()
     try {
       feature.loadPipeline(1, 10)
-      awaitNewCalls(callEvents, 2)
+      awaitCalls(completedCalls, 2)
       assertEquals(2, server.requestCount)
 
       // Backgrounded: advancing virtual time well past the 8s interval must not poll.
@@ -128,12 +131,12 @@ class PipelinePollingTest {
 
       // Returning to foreground refreshes immediately without waiting another 8s.
       foreground.value = true
-      awaitNewCalls(callEvents, 2)
+      awaitCalls(completedCalls, 4)
       assertEquals(4, server.requestCount)
 
       // Foreground polling resumes normally after 8s.
       advanceTimeBy(LivePolling.INTERVAL)
-      awaitNewCalls(callEvents, 2)
+      awaitCalls(completedCalls, 6)
       assertEquals(6, server.requestCount)
     } finally {
       feature.reset()
@@ -143,10 +146,10 @@ class PipelinePollingTest {
 
   @Test
   fun `job polling pauses in background and refreshes on return`() = runTest {
-    val (feature, foreground, callEvents) = newHarness()
+    val (feature, foreground, completedCalls) = newHarness()
     try {
       feature.loadJob(1, 20)
-      awaitNewCalls(callEvents, 2)
+      awaitCalls(completedCalls, 2)
       assertEquals(2, server.requestCount)
 
       foreground.value = false
@@ -156,7 +159,7 @@ class PipelinePollingTest {
       assertEquals(2, server.requestCount)
 
       foreground.value = true
-      awaitNewCalls(callEvents, 2)
+      awaitCalls(completedCalls, 4)
       assertEquals(4, server.requestCount)
     } finally {
       feature.reset()
