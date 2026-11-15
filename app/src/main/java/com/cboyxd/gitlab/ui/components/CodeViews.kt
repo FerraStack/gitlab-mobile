@@ -137,7 +137,7 @@ fun LazyCodeView(
       items(lines.size) { index -> rows(index, Modifier.fillMaxWidth()) }
     }
   } else {
-    val longest = remember(code) { (code.lineSequence().maxOfOrNull { it.length } ?: 0).coerceAtMost(MAX_CODE_COLUMNS) }
+    val longest = remember(lines) { (lines.maxOfOrNull { it.length } ?: 0).coerceAtMost(MAX_CODE_COLUMNS) }
     BoxWithConstraints(modifier.fillMaxSize().background(c.codeBg)) {
       val contentWidth = maxOf(
         maxWidth,

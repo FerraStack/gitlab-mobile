@@ -147,7 +147,16 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     val normalized = ref?.takeIf { it != d.project.data.defaultBranch }
     if (normalized == d.ref) return
     update(d.projectId) {
-      it.copy(ref = normalized, treePath = "", tree = emptyFeed(), commits = emptyFeed(), readme = Loadable(null))
+      it.copy(
+        ref = normalized,
+        treePath = "",
+        tree = emptyFeed(),
+        treeTotalCount = null,
+        treeTruncated = false,
+        commits = emptyFeed(),
+        commitsNextPage = null,
+        readme = Loadable(null),
+      )
     }
     loadReadme()
     openPath("")
@@ -183,7 +192,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     loadSection(ProjectSection.MERGE_REQUESTS, force = true)
   }
 
-  /** Appends the next page of issues or merge requests. */
+  /** Appends the next page of issues, merge requests, pipelines or commits. */
   fun loadMore(section: ProjectSection) {
     val d = detail
     val id = d.project.data?.id ?: return
@@ -234,6 +243,55 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
             }
           }
           result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) { loadMore(section) } }
+        }
+      }
+      ProjectSection.PIPELINES -> {
+        val page = d.pipelinesNextPage ?: return
+        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true, loadMoreFailed = false) } }
+        moreJob = host.session.launch {
+          val result = host.api { instance ->
+            repo.getPipelinesPage(instance, id, page = page).map { listPage ->
+              listPage.copy(items = repo.attachJobs(instance, listPage.items, limit = 8))
+            }
+          }
+          host.state.update { s ->
+            s.withProject(id) { p ->
+              val next = result.getOrNull()
+              if (next == null) {
+                p.copy(loadingMore = false, loadMoreFailed = true)
+              } else {
+                p.copy(
+                  pipelines = p.pipelines.success((p.pipelines.data + next.items).distinctBy { it.id }),
+                  pipelinesNextPage = next.nextPage,
+                  loadingMore = false,
+                )
+              }
+            }
+          }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+        }
+      }
+      ProjectSection.COMMITS -> {
+        val page = d.commitsNextPage ?: return
+        val ref = d.effectiveRef ?: return
+        host.state.update { s -> s.withProject(id) { it.copy(loadingMore = true, loadMoreFailed = false) } }
+        moreJob = host.session.launch {
+          val result = host.api { repo.getCommitsPage(it, id, ref, page = page) }
+          host.state.update { s ->
+            s.withProject(id) { p ->
+              val next = result.getOrNull()
+              when {
+                p.effectiveRef != ref -> p.copy(loadingMore = false)
+                next == null -> p.copy(loadingMore = false, loadMoreFailed = true)
+                else -> p.copy(
+                  commits = p.commits.success((p.commits.data + next.items).distinctBy { it.id }),
+                  commitsNextPage = next.nextPage,
+                  loadingMore = false,
+                )
+              }
+            }
+          }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
         }
       }
       else -> Unit
@@ -287,16 +345,43 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
             }
           })
       }
-      ProjectSection.PIPELINES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(pipelines = it.pipelines.start()) } },
-        { instance -> repo.getPipelines(instance, id).map { list -> repo.attachJobs(instance, list, limit = 8) } },
-        { s, r -> s.withProject(id) { it.copy(pipelines = it.pipelines.settle(r)) } })
+      ProjectSection.PIPELINES -> host.load(
+        sectionJobs[section],
+        { s -> s.withProject(id) { it.copy(pipelines = it.pipelines.start(), loadMoreFailed = false) } },
+        { instance ->
+          repo.getPipelinesPage(instance, id).map { page ->
+            page.copy(items = repo.attachJobs(instance, page.items, limit = 8))
+          }
+        },
+        { s, r ->
+          s.withProject(id) {
+            it.copy(
+              pipelines = it.pipelines.settle(r.map { page -> page.items }),
+              pipelinesNextPage = r.getOrNull()?.nextPage,
+            )
+          }
+        },
+      )
       ProjectSection.ENVIRONMENTS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(environments = it.environments.start()) } },
         { repo.getProjectEnvironments(it, id) }, { s, r -> s.withProject(id) { it.copy(environments = it.environments.settle(r)) } })
       ProjectSection.CI_VARIABLES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(ciVariables = it.ciVariables.start()) } },
         { repo.getProjectVariables(it, id) }, { s, r -> s.withProject(id) { it.copy(ciVariables = it.ciVariables.settle(r)) } })
-      ProjectSection.COMMITS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(commits = it.commits.start()) } },
-        { if (ref == null) Result.success(emptyList()) else repo.getCommits(it, id, ref) },
-        { s, r -> s.withProject(id) { it.copy(commits = it.commits.settle(r)) } })
+      ProjectSection.COMMITS -> host.load(
+        sectionJobs[section],
+        { s -> s.withProject(id) { it.copy(commits = it.commits.start(), loadMoreFailed = false) } },
+        {
+          if (ref == null) Result.success(com.cboyxd.gitlab.data.repository.ListPage(emptyList(), null))
+          else repo.getCommitsPage(it, id, ref)
+        },
+        { s, r ->
+          s.withProject(id) {
+            it.copy(
+              commits = it.commits.settle(r.map { page -> page.items }),
+              commitsNextPage = r.getOrNull()?.nextPage,
+            )
+          }
+        },
+      )
       ProjectSection.BRANCHES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(branches = it.branches.start()) } },
         { repo.getBranches(it, id) }, { s, r -> s.withProject(id) { it.copy(branches = it.branches.settle(r)) } })
       ProjectSection.TAGS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(tags = it.tags.start()) } },
@@ -369,19 +454,19 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     val id = project.id
     val ref = d.effectiveRef
     if (ref == null || project.emptyRepo) {
-      update(id) { it.copy(treePath = path, tree = it.tree.success(emptyList())) }
+      update(id) { it.copy(treePath = path, tree = it.tree.success(emptyList()), treeTotalCount = null, treeTruncated = false) }
       return
     }
     treeJob = host.load(
       treeJob,
-      start = { s -> s.withProject(id) { it.copy(treePath = path, tree = it.tree.copy(loading = true, error = null)) } },
-      request = { host.repository.getRepositoryTree(it, id, path, ref) },
+      start = { s -> s.withProject(id) { it.copy(treePath = path, tree = it.tree.copy(loading = true, error = null), treeTotalCount = null, treeTruncated = false) } },
+      request = { host.repository.getRepositoryTreePage(it, id, path, ref) },
       finish = { s, r ->
         s.withProject(id) {
           if (it.treePath != path) it
           else r.fold(
-            onSuccess = { list -> it.copy(tree = it.tree.success(list)) },
-            onFailure = { e -> it.copy(tree = it.tree.copy(data = emptyList()).failure(e.userMessage())) },
+            onSuccess = { slice -> it.copy(tree = it.tree.success(slice.items), treeTotalCount = slice.totalCount, treeTruncated = slice.truncated) },
+            onFailure = { e -> it.copy(tree = it.tree.copy(data = emptyList()).failure(e.userMessage()), treeTotalCount = null, treeTruncated = false) },
           )
         }
       },
@@ -425,8 +510,18 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
         host.state.update { s -> if (s.commitDetail.sha != sha) s else s.copy(commitDetail = s.commitDetail.copy(commit = s.commitDetail.commit.settle(result.map { c -> c as com.cboyxd.gitlab.data.model.GitLabCommit? }))) }
       }
       launch {
-        val result = host.api { host.repository.getCommitDiff(it, projectId, sha) }
-        host.state.update { s -> if (s.commitDetail.sha != sha) s else s.copy(commitDetail = s.commitDetail.copy(diffs = s.commitDetail.diffs.settle(result))) }
+        val result = host.api { host.repository.getCommitDiffPage(it, projectId, sha) }
+        val slice = result.getOrNull()
+        host.state.update { s ->
+          if (s.commitDetail.sha != sha) s
+          else s.copy(
+            commitDetail = s.commitDetail.copy(
+              diffs = s.commitDetail.diffs.settle(result.map { it.items }),
+              diffsTotalCount = slice?.totalCount,
+              diffsTruncated = slice?.truncated == true,
+            ),
+          )
+        }
       }
     }
   }
