@@ -422,6 +422,7 @@ private fun issueMetaRows(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditIssueDialog(
   issue: GitLabIssue,
@@ -437,60 +438,71 @@ private fun EditIssueDialog(
   var saving by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
   var titleError by remember { mutableStateOf(false) }
-  AlertDialog(
+  ModalBottomSheet(
     onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
     containerColor = c.surface,
-    title = { Text("Edit issue", style = Gl.type.title, color = c.textPrimary) },
-    text = {
-      Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        OutlinedTextField(
-          value = title,
-          onValueChange = { title = it; titleError = false },
-          label = { Text("Title") },
-          isError = titleError,
-          supportingText = if (titleError) ({ Text("Enter a title") }) else null,
-          singleLine = true,
-          enabled = !saving,
-          colors = fieldColors(),
-          modifier = Modifier.fillMaxWidth(),
-        )
-        MarkdownEditor(
-          value = description,
-          onValueChange = { description = it },
-          label = "Description",
-          minLines = 4,
-          maxLines = 10,
-          enabled = !saving,
-          previewContext = context,
-        )
-        error?.let { InlineError(it) }
-      }
-    },
-    confirmButton = {
-      GlButton(
-        text = "Save changes",
-        loading = saving,
-        onClick = {
-          if (title.isBlank()) {
-            titleError = true
-          } else {
-            saving = true
-            error = null
-            onSave(title, description.text) { result ->
-              saving = false
-              if (result == null) onDismiss() else error = result
-            }
-          }
-        },
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text("Edit issue", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      OutlinedTextField(
+        value = title,
+        onValueChange = { title = it; titleError = false },
+        label = { Text("Title") },
+        isError = titleError,
+        supportingText = if (titleError) ({ Text("Enter a title") }) else null,
+        singleLine = true,
+        enabled = !saving,
+        colors = fieldColors(),
+        modifier = Modifier.fillMaxWidth(),
       )
-    },
-    dismissButton = { GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving) },
-  )
+      MarkdownEditor(
+        value = description,
+        onValueChange = { description = it },
+        label = "Description",
+        minLines = 4,
+        maxLines = 10,
+        enabled = !saving,
+        previewContext = context,
+      )
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save changes",
+          loading = saving,
+          modifier = Modifier.weight(1f),
+          onClick = {
+            if (title.isBlank()) {
+              titleError = true
+            } else {
+              saving = true
+              error = null
+              onSave(title, description.text) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditMergeRequestDialog(
   mr: GitLabMergeRequest,
@@ -506,58 +518,68 @@ private fun EditMergeRequestDialog(
   var saving by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
   var titleError by remember { mutableStateOf(false) }
-  AlertDialog(
+  ModalBottomSheet(
     onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
     containerColor = c.surface,
-    title = { Text("Edit merge request", style = Gl.type.title, color = c.textPrimary) },
-    text = {
-      Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        OutlinedTextField(
-          value = title,
-          onValueChange = { title = it; titleError = false },
-          label = { Text("Title") },
-          isError = titleError,
-          supportingText = if (titleError) ({ Text("Enter a title") }) else null,
-          singleLine = true,
-          enabled = !saving,
-          colors = fieldColors(),
-          modifier = Modifier.fillMaxWidth().testTag("edit_mr_title"),
-        )
-        MarkdownEditor(
-          value = description,
-          onValueChange = { description = it },
-          label = "Description",
-          minLines = 4,
-          maxLines = 10,
-          enabled = !saving,
-          previewContext = context,
-        )
-        error?.let { InlineError(it) }
-      }
-    },
-    confirmButton = {
-      GlButton(
-        text = "Save changes",
-        loading = saving,
-        onClick = {
-          if (title.isBlank()) {
-            titleError = true
-          } else {
-            saving = true
-            error = null
-            onSave(title.trim(), description.text) { result ->
-              saving = false
-              if (result == null) onDismiss() else error = result
-            }
-          }
-        },
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text("Edit merge request", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      OutlinedTextField(
+        value = title,
+        onValueChange = { title = it; titleError = false },
+        label = { Text("Title") },
+        isError = titleError,
+        supportingText = if (titleError) ({ Text("Enter a title") }) else null,
+        singleLine = true,
+        enabled = !saving,
+        colors = fieldColors(),
+        modifier = Modifier.fillMaxWidth().testTag("edit_mr_title"),
       )
-    },
-    dismissButton = { GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving) },
-  )
+      MarkdownEditor(
+        value = description,
+        onValueChange = { description = it },
+        label = "Description",
+        minLines = 4,
+        maxLines = 10,
+        enabled = !saving,
+        previewContext = context,
+      )
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save changes",
+          loading = saving,
+          modifier = Modifier.weight(1f),
+          onClick = {
+            if (title.isBlank()) {
+              titleError = true
+            } else {
+              saving = true
+              error = null
+              onSave(title.trim(), description.text) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2415,6 +2437,7 @@ private val stringSetSaver = listSaver<Set<String>, String>(
   restore = { it.toSet() },
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MemberPickerDialog(
   title: String,
@@ -2441,97 +2464,108 @@ private fun MemberPickerDialog(
       it.name.contains(q, ignoreCase = true) || it.username.contains(q, ignoreCase = true)
     }
   }
-  AlertDialog(
+  ModalBottomSheet(
     onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
     containerColor = c.surface,
-    title = { Text(title, style = Gl.type.title, color = c.textPrimary) },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (allMembers.isNotEmpty()) {
-          OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text("Filter members") },
-            singleLine = true,
-            enabled = !saving,
-            colors = fieldColors(),
-            modifier = Modifier.fillMaxWidth(),
-          )
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(title, style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      if (allMembers.isNotEmpty()) {
+        OutlinedTextField(
+          value = query,
+          onValueChange = { query = it },
+          label = { Text("Filter members") },
+          singleLine = true,
+          enabled = !saving,
+          colors = fieldColors(),
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
+      when {
+        members.initialLoading && allMembers.isEmpty() -> Box(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
         }
-        when {
-          members.initialLoading && allMembers.isEmpty() -> Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-            contentAlignment = Alignment.Center,
-          ) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
-          }
-          members.error != null && allMembers.isEmpty() -> InlineError(members.error, onRetry = onRetry)
-          allMembers.isEmpty() -> Text("No project members found.", style = Gl.type.bodySmall, color = c.textSecondary)
-          filtered.isEmpty() -> Text("No matching members.", style = Gl.type.bodySmall, color = c.textSecondary)
-          else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
-            items(filtered, key = { it.id }) { user ->
-              val checked = user.id in selectedIds
-              val display = user.name.ifBlank { user.username }
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .toggleable(
-                    value = checked,
-                    enabled = !saving,
-                    role = Role.Checkbox,
-                    onValueChange = { isChecked ->
-                      selectedIds = if (isChecked) selectedIds + user.id else selectedIds - user.id
-                    },
-                  )
-                  .heightIn(min = GlSpace.touch)
-                  .padding(vertical = 4.dp)
-                  .testTag("pick_member_${user.id}"),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Checkbox(checked = checked, onCheckedChange = null, enabled = !saving)
-                Spacer(Modifier.width(8.dp))
-                Avatar(user.avatarUrl, display, 28.dp)
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                  Text(display, style = Gl.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                  if (user.username.isNotBlank()) {
-                    Text("@${user.username}", style = Gl.type.meta, color = c.textSecondary, maxLines = 1)
-                  }
+        members.error != null && allMembers.isEmpty() -> InlineError(members.error, onRetry = onRetry)
+        allMembers.isEmpty() -> Text("No project members found.", style = Gl.type.bodySmall, color = c.textSecondary)
+        filtered.isEmpty() -> Text("No matching members.", style = Gl.type.bodySmall, color = c.textSecondary)
+        else -> Column(modifier = Modifier.fillMaxWidth()) {
+          filtered.forEach { user ->
+            val checked = user.id in selectedIds
+            val display = user.name.ifBlank { user.username }
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(
+                  value = checked,
+                  enabled = !saving,
+                  role = Role.Checkbox,
+                  onValueChange = { isChecked ->
+                    selectedIds = if (isChecked) selectedIds + user.id else selectedIds - user.id
+                  },
+                )
+                .heightIn(min = GlSpace.touch)
+                .padding(vertical = 4.dp)
+                .testTag("pick_member_${user.id}"),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Checkbox(checked = checked, onCheckedChange = null, enabled = !saving)
+              Spacer(Modifier.width(8.dp))
+              Avatar(user.avatarUrl, display, 28.dp)
+              Spacer(Modifier.width(10.dp))
+              Column(Modifier.weight(1f)) {
+                Text(display, style = Gl.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (user.username.isNotBlank()) {
+                  Text("@${user.username}", style = Gl.type.meta, color = c.textSecondary, maxLines = 1)
                 }
               }
             }
           }
         }
-        error?.let { InlineError(it) }
       }
-    },
-    confirmButton = {
-      GlButton(
-        text = "Save",
-        loading = saving,
-        enabled = !saving && (allMembers.isNotEmpty() || selectedIds.isNotEmpty()),
-        modifier = Modifier.testTag("triage_save"),
-        onClick = {
-          val initial = selected.map { it.id }.toSet()
-          if (selectedIds == initial) {
-            onDismiss()
-          } else {
-            saving = true
-            error = null
-            onSave(selectedIds.toList()) { result ->
-              saving = false
-              if (result == null) onDismiss() else error = result
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save",
+          loading = saving,
+          enabled = !saving && (allMembers.isNotEmpty() || selectedIds.isNotEmpty()),
+          modifier = Modifier.weight(1f).testTag("triage_save"),
+          onClick = {
+            val initial = selected.map { it.id }.toSet()
+            if (selectedIds == initial) {
+              onDismiss()
+            } else {
+              saving = true
+              error = null
+              onSave(selectedIds.toList()) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
             }
-          }
-        },
-      )
-    },
-    dismissButton = {
-      GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
-    },
-  )
+          },
+        )
+      }
+    }
+  }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LabelPickerDialog(
   availableLabels: Map<String, GitLabLabel>,
@@ -2553,84 +2587,95 @@ private fun LabelPickerDialog(
     val q = query.trim()
     if (q.isEmpty()) allNames else allNames.filter { it.contains(q, ignoreCase = true) }
   }
-  AlertDialog(
+  ModalBottomSheet(
     onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
     containerColor = c.surface,
-    title = { Text("Labels", style = Gl.type.title, color = c.textPrimary) },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if (allNames.isNotEmpty()) {
-          OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            label = { Text("Filter labels") },
-            singleLine = true,
-            enabled = !saving,
-            colors = fieldColors(),
-            modifier = Modifier.fillMaxWidth(),
-          )
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("Labels", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      if (allNames.isNotEmpty()) {
+        OutlinedTextField(
+          value = query,
+          onValueChange = { query = it },
+          label = { Text("Filter labels") },
+          singleLine = true,
+          enabled = !saving,
+          colors = fieldColors(),
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
+      when {
+        allNames.isEmpty() -> Text("No project labels found.", style = Gl.type.bodySmall, color = c.textSecondary)
+        filtered.isEmpty() -> Text("No matching labels.", style = Gl.type.bodySmall, color = c.textSecondary)
+        else -> Column(modifier = Modifier.fillMaxWidth()) {
+          filtered.forEach { name ->
+            val checked = name in selected
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(
+                  value = checked,
+                  enabled = !saving,
+                  role = Role.Checkbox,
+                  onValueChange = { isChecked ->
+                    selected = if (isChecked) selected + name else selected - name
+                  },
+                )
+                .heightIn(min = GlSpace.touch)
+                .padding(vertical = 4.dp)
+                .testTag("pick_label_$name"),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Checkbox(checked = checked, onCheckedChange = null, enabled = !saving)
+              Spacer(Modifier.width(8.dp))
+              ColoredLabel(name, availableLabels[name])
+            }
+          }
         }
-        when {
-          allNames.isEmpty() -> Text("No project labels found.", style = Gl.type.bodySmall, color = c.textSecondary)
-          filtered.isEmpty() -> Text("No matching labels.", style = Gl.type.bodySmall, color = c.textSecondary)
-          else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
-            items(filtered, key = { it }) { name ->
-              val checked = name in selected
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .toggleable(
-                    value = checked,
-                    enabled = !saving,
-                    role = Role.Checkbox,
-                    onValueChange = { isChecked ->
-                      selected = if (isChecked) selected + name else selected - name
-                    },
-                  )
-                  .heightIn(min = GlSpace.touch)
-                  .padding(vertical = 4.dp)
-                  .testTag("pick_label_$name"),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                Checkbox(checked = checked, onCheckedChange = null, enabled = !saving)
-                Spacer(Modifier.width(8.dp))
-                ColoredLabel(name, availableLabels[name])
+      }
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save",
+          loading = saving,
+          enabled = !saving && allNames.isNotEmpty(),
+          modifier = Modifier.weight(1f).testTag("triage_save"),
+          onClick = {
+            val initial = currentLabels.toSet()
+            val add = selected.filter { it !in initial }.takeIf { it.isNotEmpty() }?.joinToString(",")
+            val remove = initial.filter { it !in selected }.takeIf { it.isNotEmpty() }?.joinToString(",")
+            if (add == null && remove == null) {
+              onDismiss()
+            } else {
+              saving = true
+              error = null
+              onSave(add, remove) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
               }
             }
-          }
-        }
-        error?.let { InlineError(it) }
+          },
+        )
       }
-    },
-    confirmButton = {
-      GlButton(
-        text = "Save",
-        loading = saving,
-        enabled = !saving && allNames.isNotEmpty(),
-        modifier = Modifier.testTag("triage_save"),
-        onClick = {
-          val initial = currentLabels.toSet()
-          val add = selected.filter { it !in initial }.takeIf { it.isNotEmpty() }?.joinToString(",")
-          val remove = initial.filter { it !in selected }.takeIf { it.isNotEmpty() }?.joinToString(",")
-          if (add == null && remove == null) {
-            onDismiss()
-          } else {
-            saving = true
-            error = null
-            onSave(add, remove) { result ->
-              saving = false
-              if (result == null) onDismiss() else error = result
-            }
-          }
-        },
-      )
-    },
-    dismissButton = {
-      GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
-    },
-  )
+    }
+  }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MilestonePickerDialog(
   milestones: Loadable<List<GitLabMilestone>>,
@@ -2646,97 +2691,105 @@ private fun MilestonePickerDialog(
   val allMilestones = remember(milestones.data, current) {
     (listOfNotNull(current?.takeIf { it.id > 0L }) + milestones.data).distinctBy { it.id }
   }
-  AlertDialog(
+  ModalBottomSheet(
     onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
     containerColor = c.surface,
-    title = { Text("Milestone", style = Gl.type.title, color = c.textPrimary) },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        when {
-          milestones.initialLoading && allMilestones.isEmpty() -> Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
-            contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("Milestone", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      when {
+        milestones.initialLoading && allMilestones.isEmpty() -> Box(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
+        }
+        milestones.error != null && allMilestones.isEmpty() -> InlineError(milestones.error, onRetry = onRetry)
+        else -> Column(modifier = Modifier.fillMaxWidth()) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .selectable(
+                selected = selectedId == 0L,
+                enabled = !saving,
+                role = Role.RadioButton,
+                onClick = { selectedId = 0L },
+              )
+              .heightIn(min = GlSpace.touch)
+              .testTag("pick_milestone_none"),
+            verticalAlignment = Alignment.CenterVertically,
           ) {
-            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
+            RadioButton(selected = selectedId == 0L, onClick = null, enabled = !saving)
+            Spacer(Modifier.width(8.dp))
+            Text("No milestone", style = Gl.type.body, color = c.textSecondary)
           }
-          milestones.error != null && allMilestones.isEmpty() -> InlineError(milestones.error, onRetry = onRetry)
-          else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
-            item(key = "none") {
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .selectable(
-                    selected = selectedId == 0L,
-                    enabled = !saving,
-                    role = Role.RadioButton,
-                    onClick = { selectedId = 0L },
-                  )
-                  .heightIn(min = GlSpace.touch)
-                  .testTag("pick_milestone_none"),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                RadioButton(selected = selectedId == 0L, onClick = null, enabled = !saving)
-                Spacer(Modifier.width(8.dp))
-                Text("No milestone", style = Gl.type.body, color = c.textSecondary)
-              }
-            }
-            items(allMilestones, key = { it.id }) { milestone ->
-              Row(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .selectable(
-                    selected = selectedId == milestone.id,
-                    enabled = !saving,
-                    role = Role.RadioButton,
-                    onClick = { selectedId = milestone.id },
-                  )
-                  .heightIn(min = GlSpace.touch)
-                  .padding(vertical = 4.dp)
-                  .testTag("pick_milestone_${milestone.id}"),
-                verticalAlignment = Alignment.CenterVertically,
-              ) {
-                RadioButton(selected = selectedId == milestone.id, onClick = null, enabled = !saving)
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                  Text(milestone.title, style = Gl.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                  val meta = listOfNotNull(
-                    milestone.dueDate?.takeIf { it.isNotBlank() }?.let { "Due $it" },
-                    milestone.state.takeIf { it.isNotBlank() && it != "active" },
-                  ).joinToString(" · ")
-                  if (meta.isNotEmpty()) {
-                    Text(meta, style = Gl.type.meta, color = c.textSecondary, maxLines = 1)
-                  }
+          allMilestones.forEach { milestone ->
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .selectable(
+                  selected = selectedId == milestone.id,
+                  enabled = !saving,
+                  role = Role.RadioButton,
+                  onClick = { selectedId = milestone.id },
+                )
+                .heightIn(min = GlSpace.touch)
+                .padding(vertical = 4.dp)
+                .testTag("pick_milestone_${milestone.id}"),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              RadioButton(selected = selectedId == milestone.id, onClick = null, enabled = !saving)
+              Spacer(Modifier.width(8.dp))
+              Column(Modifier.weight(1f)) {
+                Text(milestone.title, style = Gl.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val meta = listOfNotNull(
+                  milestone.dueDate?.takeIf { it.isNotBlank() }?.let { "Due $it" },
+                  milestone.state.takeIf { it.isNotBlank() && it != "active" },
+                ).joinToString(" · ")
+                if (meta.isNotEmpty()) {
+                  Text(meta, style = Gl.type.meta, color = c.textSecondary, maxLines = 1)
                 }
               }
             }
           }
         }
-        error?.let { InlineError(it) }
       }
-    },
-    confirmButton = {
-      GlButton(
-        text = "Save",
-        loading = saving,
-        enabled = !saving,
-        modifier = Modifier.testTag("triage_save"),
-        onClick = {
-          if (selectedId == (current?.id ?: 0L)) {
-            onDismiss()
-          } else {
-            saving = true
-            error = null
-            onSave(selectedId) { result ->
-              saving = false
-              if (result == null) onDismiss() else error = result
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save",
+          loading = saving,
+          enabled = !saving,
+          modifier = Modifier.weight(1f).testTag("triage_save"),
+          onClick = {
+            if (selectedId == (current?.id ?: 0L)) {
+              onDismiss()
+            } else {
+              saving = true
+              error = null
+              onSave(selectedId) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
             }
-          }
-        },
-      )
-    },
-    dismissButton = {
-      GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
-    },
-  )
+          },
+        )
+      }
+    }
+  }
 }
 
