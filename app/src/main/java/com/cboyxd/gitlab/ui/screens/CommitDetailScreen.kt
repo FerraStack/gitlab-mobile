@@ -48,6 +48,7 @@ import com.cboyxd.gitlab.ui.components.GlTopBar
 import com.cboyxd.gitlab.ui.components.InlineError
 import com.cboyxd.gitlab.ui.components.LoadingState
 import com.cboyxd.gitlab.ui.components.MonoPill
+import com.cboyxd.gitlab.ui.components.TruncationNotice
 import com.cboyxd.gitlab.ui.components.diffFileItems
 import com.cboyxd.gitlab.ui.components.diffStats
 import com.cboyxd.gitlab.ui.components.pipelineStatusStyle
@@ -177,15 +178,34 @@ fun CommitDetailScreen(
             diffs.data.isEmpty() -> item(key = "diff-empty") {
               EmptyState(Icons.Outlined.Difference, "No changes", "This commit doesn't change any files.")
             }
-            else -> diffFileItems(
-              diffs = diffs.data,
-              parsed = prepared.parsed,
-              prepared = prepared.texts,
-              collapsed = collapsed,
-              viewed = emptySet(),
-              onToggleCollapsed = { i -> collapsed = if (i in collapsed) collapsed - i else collapsed + i },
-              onToggleViewed = null,
-            )
+            else -> {
+              diffFileItems(
+                diffs = diffs.data,
+                parsed = prepared.parsed,
+                prepared = prepared.texts,
+                collapsed = collapsed,
+                viewed = emptySet(),
+                onToggleCollapsed = { i -> collapsed = if (i in collapsed) collapsed - i else collapsed + i },
+                onToggleViewed = null,
+                metrics = prepared.metrics,
+              )
+              if (state.diffsTruncated) {
+                item(key = "diffs-truncated") {
+                  val shown = diffs.data.size
+                  val total = state.diffsTotalCount
+                  val message = if (total != null && total > shown) {
+                    "Showing the first $shown of $total changed files."
+                  } else {
+                    "Showing the first $shown changed files."
+                  }
+                  TruncationNotice(
+                    message = message,
+                    modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+                    onOpenInBrowser = commit.webUrl?.takeIf { it.isNotBlank() }?.let { web -> { onOpenInBrowser(web) } },
+                  )
+                }
+              }
+            }
           }
           item(key = "bottom") { Spacer(Modifier.height(0.dp).navigationBarsPadding()) }
         }

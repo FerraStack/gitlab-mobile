@@ -2,8 +2,8 @@ package com.cboyxd.gitlab.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
@@ -154,6 +154,7 @@ import com.cboyxd.gitlab.ui.components.MarkdownText
 import com.cboyxd.gitlab.ui.components.PipelineCard
 import com.cboyxd.gitlab.ui.components.PipelineStatusBadge
 import com.cboyxd.gitlab.ui.components.Tone
+import com.cboyxd.gitlab.ui.components.TruncationNotice
 import com.cboyxd.gitlab.ui.components.diffFileItems
 import com.cboyxd.gitlab.ui.components.diffStats
 import com.cboyxd.gitlab.ui.components.issueStateStyle
@@ -718,6 +719,22 @@ private fun MergeRequestOverview(
                 }
                 RailGap()
               }
+              if (state.discussionsTruncated) {
+                item(key = "discussions-truncated") {
+                  val shown = state.discussions.data.size
+                  val total = state.discussionsTotalCount
+                  val message = if (total != null && total > shown) {
+                    "Showing the first $shown of $total discussion threads."
+                  } else {
+                    "Showing the first $shown discussion threads."
+                  }
+                  TruncationNotice(
+                    message = message,
+                    modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+                    onOpenInBrowser = mr.webUrl.takeIf { it.isNotBlank() }?.let { web -> { onOpenInBrowser(web) } },
+                  )
+                }
+              }
             }
           }
         }
@@ -1073,8 +1090,8 @@ private fun FilesChangedPage(
   val commented = remember(state.discussions.data, headSha) { commentedLines(state.discussions.data, headSha) }
   val stats = remember(diffs.data) { diffStats(diffs.data) }
   val prepared = rememberPreparedDiffs(diffs.data)
-  var collapsedPaths by rememberSaveable(state.projectId, state.iid) { mutableStateOf(emptyList<String>()) }
-  var viewedPaths by rememberSaveable(state.projectId, state.iid) { mutableStateOf(emptyList<String>()) }
+  var collapsedPaths by rememberSaveable(state.projectId, state.iid, stateSaver = boundedStringSetSaver()) { mutableStateOf(emptySet<String>()) }
+  var viewedPaths by rememberSaveable(state.projectId, state.iid, stateSaver = boundedStringSetSaver()) { mutableStateOf(emptySet<String>()) }
   var selectedPath by rememberSaveable(state.projectId, state.iid) { mutableStateOf<String?>(null) }
   val (options, changeOptions) = rememberDiffDisplayOptions()
   var showingOptions by remember { mutableStateOf(false) }
@@ -1083,9 +1100,15 @@ private fun FilesChangedPage(
   val listState = rememberLazyListState()
   val scope = rememberCoroutineScope()
   fun path(index: Int) = diffs.data[index].newPath.ifBlank { diffs.data[index].oldPath }
-  val collapsed = diffs.data.indices.filter { path(it) in collapsedPaths }.toSet()
-  val viewed = diffs.data.indices.filter { path(it) in viewedPaths }.toSet()
-  val selectedFile = diffs.data.indices.firstOrNull { path(it) == selectedPath }
+  val collapsed = remember(diffs.data, collapsedPaths) {
+    diffs.data.indices.filterTo(HashSet()) { path(it) in collapsedPaths }
+  }
+  val viewed = remember(diffs.data, viewedPaths) {
+    diffs.data.indices.filterTo(HashSet()) { path(it) in viewedPaths }
+  }
+  val selectedFile = remember(diffs.data, selectedPath) {
+    diffs.data.indices.firstOrNull { path(it) == selectedPath }
+  }
   Column(modifier = modifier.fillMaxSize().background(c.bg)) {
     GlTopBar(
       title = "Files changed",
@@ -1104,33 +1127,48 @@ private fun FilesChangedPage(
         EmptyState(Icons.Outlined.Difference, "No changes available", "GitLab may still be preparing the changes for a new merge request. Refresh to check again.", actionLabel = "Refresh", onAction = onRetry)
       }
       else -> CompositionLocalProvider(LocalDiffScrollStates provides scrollStates, LocalDiffDisplayOptions provides options) {
-        SelectionContainer(Modifier.weight(1f)) {
-          LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = GlSpace.group)) {
-            if (error != null) item(key = "diff-error") { InlineError(error, onRetry = onRetry, modifier = Modifier.padding(16.dp)) }
-            diffFileItems(
-              diffs = diffs.data,
-              parsed = prepared.parsed,
-              prepared = prepared.texts,
-              collapsed = collapsed,
-              viewed = viewed,
-              wrapLines = options.wrapLines,
-              selectedFile = selectedFile,
-              commented = commented,
-              onLineClick = if (canComment) ({ file, line -> commentingOn = file to line }) else null,
-              onToggleCollapsed = { i -> val key = path(i); collapsedPaths = if (key in collapsedPaths) collapsedPaths - key else collapsedPaths + key },
-              onToggleViewed = { i ->
-                val key = path(i)
-                if (key in viewedPaths) {
-                  viewedPaths = viewedPaths - key
-                  collapsedPaths = collapsedPaths - key
-                } else {
-                  viewedPaths = viewedPaths + key
-                  collapsedPaths = if (key in collapsedPaths) collapsedPaths else collapsedPaths + key
-                }
-              },
-            )
-            item(key = "bottom") { Spacer(Modifier.navigationBarsPadding()) }
+        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = GlSpace.group)) {
+          if (error != null) item(key = "diff-error") { InlineError(error, onRetry = onRetry, modifier = Modifier.padding(16.dp)) }
+          diffFileItems(
+            diffs = diffs.data,
+            parsed = prepared.parsed,
+            prepared = prepared.texts,
+            collapsed = collapsed,
+            viewed = viewed,
+            wrapLines = options.wrapLines,
+            selectedFile = selectedFile,
+            commented = commented,
+            onLineClick = if (canComment) ({ file, line -> commentingOn = file to line }) else null,
+            metrics = prepared.metrics,
+            onToggleCollapsed = { i -> val key = path(i); collapsedPaths = if (key in collapsedPaths) collapsedPaths - key else collapsedPaths + key },
+            onToggleViewed = { i ->
+              val key = path(i)
+              if (key in viewedPaths) {
+                viewedPaths = viewedPaths - key
+                collapsedPaths = collapsedPaths - key
+              } else {
+                viewedPaths = viewedPaths + key
+                collapsedPaths = collapsedPaths + key
+              }
+            },
+          )
+          if (state.diffsTruncated) {
+            item(key = "diffs-truncated") {
+              val shown = diffs.data.size
+              val total = state.diffsTotalCount
+              val message = if (total != null && total > shown) {
+                "Showing the first $shown of $total changed files."
+              } else {
+                "Showing the first $shown changed files."
+              }
+              TruncationNotice(
+                message = message,
+                modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+                onOpenInBrowser = state.mergeRequest.data?.webUrl?.takeIf { it.isNotBlank() }?.let { url -> { onOpenInBrowser("$url/diffs") } },
+              )
+            }
           }
+          item(key = "bottom") { Spacer(Modifier.navigationBarsPadding()) }
         }
       }
     }
@@ -1157,7 +1195,7 @@ private fun FilesChangedPage(
       GlButton("Choose file", onClick = { showingOptions = false; pickingFile = true }, kind = GlButtonKind.Ghost, modifier = Modifier.fillMaxWidth())
       val allCollapsed = collapsed.size == diffs.data.size
       GlButton(if (allCollapsed) "Expand all files" else "Collapse all files", onClick = {
-        collapsedPaths = if (allCollapsed) emptyList() else diffs.data.indices.map { path(it) }
+        collapsedPaths = if (allCollapsed) emptySet() else diffs.data.indices.mapTo(HashSet()) { path(it) }
         showingOptions = false
       }, kind = GlButtonKind.Ghost, modifier = Modifier.fillMaxWidth())
       GlButton("Refresh changes", onClick = { showingOptions = false; onRetry() }, kind = GlButtonKind.Ghost, modifier = Modifier.fillMaxWidth())
@@ -1201,6 +1239,22 @@ private fun FilesChangedPage(
     }
   }
 }
+
+private fun boundedStringSetSaver(maxEntries: Int = 200, maxChars: Int = 16_384): Saver<Set<String>, ArrayList<String>> =
+  Saver(
+    save = { set ->
+      if (set.size > maxEntries) ArrayList()
+      else {
+        var chars = 0
+        for (s in set) {
+          chars += s.length
+          if (chars > maxChars) return@Saver ArrayList()
+        }
+        ArrayList(set)
+      }
+    },
+    restore = { it.toSet() },
+  )
 
 @Composable
 private fun SubPage(title: String, overline: String, onBack: () -> Unit, modifier: Modifier, content: LazyListScope.() -> Unit) {

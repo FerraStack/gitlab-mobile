@@ -89,6 +89,7 @@ import com.cboyxd.gitlab.ui.components.GlIconAction
 import com.cboyxd.gitlab.ui.components.GlTopBar
 import com.cboyxd.gitlab.ui.components.InlineError
 import com.cboyxd.gitlab.ui.components.LoadingState
+import com.cboyxd.gitlab.ui.components.TruncationNotice
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlRadius
 import com.cboyxd.gitlab.ui.theme.GlSpace
@@ -198,6 +199,25 @@ fun ProjectCodeScreen(
             item = item,
             onClick = { if (item.type == "tree") onOpenPath(item.path) else onOpenFile(item.path) },
           )
+        }
+        if (state.treeTruncated) {
+          item(key = "tree-truncated") {
+            val shown = tree.data.size
+            val total = state.treeTotalCount
+            val message = if (total != null && total > shown) {
+              "Showing the first $shown of $total entries in this folder."
+            } else {
+              "Showing the first $shown entries in this folder."
+            }
+            val web = state.webUrl
+            val suffix = if (state.treePath.isEmpty()) "" else "/" + state.treePath
+            val url = web?.let { "$it/-/tree/$ref$suffix" }
+            TruncationNotice(
+              message = message,
+              modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+              onOpenInBrowser = url?.let { target -> { onOpenInBrowser(target) } },
+            )
+          }
         }
         item(key = "bottom") { Spacer(Modifier.navigationBarsPadding()) }
       }

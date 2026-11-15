@@ -33,6 +33,7 @@ import com.cboyxd.gitlab.ui.components.GlTopBar
 import com.cboyxd.gitlab.ui.components.InlineError
 import com.cboyxd.gitlab.ui.components.LoadingState
 import com.cboyxd.gitlab.ui.components.PipelineCard
+import com.cboyxd.gitlab.ui.components.TruncationNotice
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
@@ -63,6 +64,8 @@ fun PipelinesScreen(
   onOpenPipeline: (GitLabPipeline) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  truncated: Boolean = false,
+  onOpenInBrowser: (() -> Unit)? = null,
 ) {
   var filter by rememberSaveable { mutableStateOf(PipelineFilter.ALL) }
   val all = pipelines.data
@@ -123,6 +126,15 @@ fun PipelinesScreen(
             items(visible, key = { "${it.projectId}-${it.id}" }) { pipeline ->
               PipelineRow(pipeline = pipeline, onRetry = onRetryPipeline, onClick = { onOpenPipeline(pipeline) })
               GlDivider()
+            }
+            if (truncated) {
+              item(key = "truncated") {
+                TruncationNotice(
+                  message = "Showing the most recent ${all.size} pipelines from your active projects.",
+                  modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+                  onOpenInBrowser = onOpenInBrowser,
+                )
+              }
             }
           }
         }

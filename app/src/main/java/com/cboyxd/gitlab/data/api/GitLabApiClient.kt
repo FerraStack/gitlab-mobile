@@ -10,17 +10,22 @@ import com.squareup.moshi.JsonWriter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import okhttp3.Dispatcher
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.io.InterruptedIOException
 import java.util.concurrent.ConcurrentHashMap
 import java.lang.reflect.Type
 import java.util.concurrent.TimeUnit
 
 object GitLabApiClient {
+
+  internal const val MAX_REQUESTS_PER_HOST = 4
+  internal const val MAX_RETRY_AFTER_SECONDS = 30L
 
   val moshi: Moshi = Moshi.Builder()
     .add(NullsAsDefaultsFactory)
@@ -29,7 +34,12 @@ object GitLabApiClient {
 
   /** One connection pool and dispatcher for every server; per-instance clients only add auth. */
   val baseHttpClient: OkHttpClient by lazy {
+    val dispatcher = Dispatcher().apply {
+      maxRequests = 32
+      maxRequestsPerHost = MAX_REQUESTS_PER_HOST
+    }
     OkHttpClient.Builder()
+      .dispatcher(dispatcher)
       .connectTimeout(15, TimeUnit.SECONDS)
       .readTimeout(30, TimeUnit.SECONDS)
       .writeTimeout(30, TimeUnit.SECONDS)
@@ -87,6 +97,7 @@ object GitLabApiClient {
 
     val client = (clientOverride ?: baseHttpClient).newBuilder()
       .addInterceptor(authInterceptor)
+      .addInterceptor(rateLimitInterceptor())
       .apply { if (download) callTimeout(0, TimeUnit.MILLISECONDS) }
       .build()
 
@@ -97,6 +108,31 @@ object GitLabApiClient {
       .build()
       .create(GitLabApiService::class.java)
   }
+}
+
+/** Retries idempotent GET/HEAD requests once when the server returns 429 with a bounded Retry-After header. */
+internal fun rateLimitInterceptor(sleepMillis: (Long) -> Unit = Thread::sleep): Interceptor = Interceptor { chain ->
+  val request = chain.request()
+  val response = chain.proceed(request)
+  if (response.code != 429 || (request.method != "GET" && request.method != "HEAD")) {
+    return@Interceptor response
+  }
+  val delaySeconds = parseRetryAfterSeconds(response.header("Retry-After")) ?: return@Interceptor response
+  response.close()
+  if (delaySeconds > 0L) {
+    try {
+      sleepMillis(delaySeconds * 1_000L)
+    } catch (interrupted: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw InterruptedIOException("Interrupted while waiting for rate limit retry").apply { initCause(interrupted) }
+    }
+  }
+  chain.proceed(request)
+}
+
+internal fun parseRetryAfterSeconds(header: String?): Long? {
+  val seconds = header?.trim()?.toLongOrNull() ?: return null
+  return seconds.takeIf { it in 0L..GitLabApiClient.MAX_RETRY_AFTER_SECONDS }
 }
 
 /**
