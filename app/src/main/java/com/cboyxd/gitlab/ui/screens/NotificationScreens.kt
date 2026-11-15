@@ -424,7 +424,7 @@ private fun HistoryRow(run: PollRun, now: Long) {
   val time = remember(run.startedAt) { SimpleDateFormat("MMM d, HH:mm", Locale.US).format(Date(run.startedAt)) }
   val severity = when (run.outcome) {
     PollOutcome.OK, PollOutcome.UNCHANGED, PollOutcome.NO_ACCOUNTS -> Severity.OK
-    PollOutcome.BUSY, PollOutcome.PARTIAL -> Severity.WARNING
+    PollOutcome.BUSY, PollOutcome.PARTIAL, PollOutcome.NOTIFICATIONS_DISABLED -> Severity.WARNING
     PollOutcome.FAILED -> Severity.PROBLEM
   }
   val details = buildList {

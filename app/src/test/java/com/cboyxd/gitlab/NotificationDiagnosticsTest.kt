@@ -129,7 +129,10 @@ class NotificationDiagnosticsTest {
     assertEquals(Severity.WARNING, titles["Battery optimization is on"])
     assertEquals(Severity.PROBLEM, titles["Background use is restricted"])
     assertEquals(Severity.WARNING, titles["Data Saver is on"])
-    assertEquals(Severity.PROBLEM, titles["No background check is scheduled"])
+    assertNull(titles["No background check is scheduled"])
+
+    val unscheduled = healthy().copy(scheduled = null).findings().associate { it.title to it.severity }
+    assertEquals(Severity.PROBLEM, unscheduled["No background check is scheduled"])
   }
 
   @Test
