@@ -6,6 +6,7 @@ import androidx.work.WorkerParameters
 import com.cboyxd.gitlab.data.api.GitLabApiException
 import com.cboyxd.gitlab.data.api.parseGitLabMillis
 import com.cboyxd.gitlab.data.auth.GitLabAuth
+import com.cboyxd.gitlab.data.auth.GitLabAuthException
 import com.cboyxd.gitlab.data.auth.GitLabSessionTokens
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
@@ -26,13 +27,16 @@ import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicInteger
 
 class GitLabNotificationWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-  override suspend fun doWork(): Result = try {
-    val trigger = if (GitLabNotifications.TAG_ONE_TIME in tags) PollTrigger.ONE_TIME else PollTrigger.PERIODIC
-    if (GitLabNotificationMonitor.poll(applicationContext, trigger)) Result.success() else Result.retry()
-  } catch (cancel: CancellationException) {
-    throw cancel
-  } catch (_: Exception) {
-    Result.retry()
+  override suspend fun doWork(): Result {
+    return try {
+      if (!GitLabNotifications.allowed(applicationContext)) return Result.success()
+      val trigger = if (GitLabNotifications.TAG_ONE_TIME in tags) PollTrigger.ONE_TIME else PollTrigger.PERIODIC
+      if (GitLabNotificationMonitor.poll(applicationContext, trigger)) Result.success() else Result.retry()
+    } catch (cancel: CancellationException) {
+      throw cancel
+    } catch (_: Exception) {
+      Result.retry()
+    }
   }
 }
 
@@ -54,6 +58,12 @@ object GitLabNotificationMonitor {
       return@withContext true
     }
     try {
+      if (!GitLabNotifications.allowed(context)) {
+        if (trigger != PollTrigger.APP_OPEN) {
+          log.record(PollRun(started, 0, trigger, PollOutcome.NOTIFICATIONS_DISABLED))
+        }
+        return@withContext true
+      }
       GitLabNotifications.createChannels(context)
       val store = InstanceStore.get(context)
       val accounts = store.getInstances().filter { it.token.isNotBlank() }
@@ -68,6 +78,16 @@ object GitLabNotificationMonitor {
       }
       var success = true
       val results = accounts.map { account ->
+        if (account.authFailure) {
+          if (!notifications.isAuthFailureNotified(account.id) && GitLabNotifications.showAuthFailure(context, account)) {
+            notifications.setAuthFailureNotified(account.id, true)
+          }
+          return@map AccountPoll(account.id, account.name, ok = false, error = AUTH_EXPIRED_ERROR, delivered = 0)
+        }
+        if (notifications.isAuthFailureNotified(account.id)) {
+          notifications.setAuthFailureNotified(account.id, false)
+          GitLabNotifications.clearAuthFailure(context, account.id)
+        }
         val delivered = AtomicInteger()
         try {
           val errors = pollAccount(context, store, notifications, account, delivered)
@@ -103,7 +123,10 @@ object GitLabNotificationMonitor {
     }
   }
 
-  private class FeedError(val message: String, val retryable: Boolean)
+  private class FeedError(val message: String, val retryable: Boolean, val unauthorized: Boolean = false)
+
+  private fun Throwable.isUnauthorizedError(): Boolean =
+    (this as? GitLabApiException)?.code == 401 || (this as? GitLabAuthException)?.rejected == true
 
   private fun describe(error: Throwable): String = when (error) {
     is GitLabApiException -> "${error.code}: ${error.message.orEmpty()}".trimEnd(':', ' ')
@@ -120,22 +143,40 @@ object GitLabNotificationMonitor {
   ): List<FeedError> = coroutineScope {
     val started = System.currentTimeMillis()
     val since = saved.cursor(account.id, "authored")
-    val todos = async { api(store, account) { repository.getTodos(it) } }
-    val assigned = async { api(store, account) { repository.getNotificationMergeRequests(it, "assigned_to_me") } }
-    val reviews = async { api(store, account) { repository.getNotificationMergeRequests(it, "reviews_for_me") } }
-    val authored = async { api(store, account) { repository.getNotificationMergeRequests(it, "created_by_me", since.takeIf { it > 0 }?.let { iso(it - 60_000) }) } }
+    val todos = async { api(store, account) { repository.getTodosFeed(it) } }
+    val assigned = async { api(store, account) { repository.getNotificationMergeRequestsFeed(it, "assigned_to_me") } }
+    val reviews = async { api(store, account) { repository.getNotificationMergeRequestsFeed(it, "reviews_for_me") } }
+    val authored = async { api(store, account) { repository.getNotificationMergeRequestsFeed(it, "created_by_me", since.takeIf { it > 0 }?.let { iso(it - 60_000) }) } }
     val assignedResult = assigned.await()
     val reviewResult = reviews.await()
     val todoResult = todos.await()
     val authoredResult = authored.await()
     // Signing out during a network request must not deliver events from that account.
     if (store.getInstances().none { it.id == account.id && it.token.isNotBlank() }) return@coroutineScope emptyList()
-    assignedResult.getOrNull()?.let { processMembership(context, saved, delivered, account, "assigned", it, started) }
-    reviewResult.getOrNull()?.let { processMembership(context, saved, delivered, account, "review", it, started) }
-    todoResult.getOrNull()?.let { list ->
+
+    val sharedServerTime = listOfNotNull(
+      assignedResult.getOrNull()?.serverTimeMs,
+      reviewResult.getOrNull()?.serverTimeMs,
+      todoResult.getOrNull()?.serverTimeMs,
+      authoredResult.getOrNull()?.serverTimeMs,
+    ).maxOrNull()
+
+    assignedResult.getOrNull()?.let { feed ->
+      val newestMs = feed.items.mapNotNull { parseGitLabMillis(it.updatedAt) }.maxOrNull()
+      val cursorMs = resolveCursor(feed.serverTimeMs ?: sharedServerTime, newestMs, saved.cursor(account.id, "assigned"), started)
+      processMembership(context, saved, delivered, account, "assigned", feed.items, cursorMs, sharedServerTime ?: started)
+    }
+    reviewResult.getOrNull()?.let { feed ->
+      val newestMs = feed.items.mapNotNull { parseGitLabMillis(it.updatedAt) }.maxOrNull()
+      val cursorMs = resolveCursor(feed.serverTimeMs ?: sharedServerTime, newestMs, saved.cursor(account.id, "review"), started)
+      processMembership(context, saved, delivered, account, "review", feed.items, cursorMs, sharedServerTime ?: started)
+    }
+    todoResult.getOrNull()?.let { feed ->
+      val list = feed.items
       val todoSince = saved.cursor(account.id, "todos")
-      val suppressedAssigned = assignedResult.getOrNull()?.map { mrKey(it) }?.toSet().orEmpty()
-      val suppressedReviews = reviewResult.getOrNull()?.map { mrKey(it) }?.toSet().orEmpty()
+      val suppressedAssigned = assignedResult.getOrNull()?.items?.map { mrKey(it) }?.toSet().orEmpty()
+      val suppressedReviews = reviewResult.getOrNull()?.items?.map { mrKey(it) }?.toSet().orEmpty()
+      val fallbackTime = feed.serverTimeMs ?: sharedServerTime ?: started
       if (todoSince > 0) list.sortedBy { it.createdAt }.forEach { todo ->
         if ((parseGitLabMillis(todo.createdAt) ?: 0) < todoSince - 300_000) return@forEach
         val projectId = todo.target?.projectId ?: todo.project?.id ?: 0
@@ -144,29 +185,33 @@ object GitLabNotificationMonitor {
             (todo.actionName == "assigned" && key in suppressedAssigned) ||
             (todo.actionName == "review_requested" && key in suppressedReviews)
           )) {
-          eventForTodo(account, todo)?.let { saved.record(it) }
+          eventForTodo(account, todo, fallbackTime)?.let { saved.record(it) }
           return@forEach
         }
-        eventForTodo(account, todo)?.let { event -> deliver(context, saved, delivered, event) }
+        eventForTodo(account, todo, fallbackTime)?.let { event -> deliver(context, saved, delivered, event) }
         // If a membership endpoint failed, a to-do still establishes that membership and
         // prevents a duplicate announcement when the endpoint recovers.
-        val feed = when {
+        val feedName = when {
           todo.targetType != "MergeRequest" -> null
           todo.actionName == "assigned" && assignedResult.isFailure -> "assigned"
           todo.actionName == "review_requested" && reviewResult.isFailure -> "review"
           else -> null
         }
-        if (feed != null && projectId > 0) {
-          val snapshot = saved.snapshot(account.id, feed)
+        if (feedName != null && projectId > 0) {
+          val snapshot = saved.snapshot(account.id, feedName)
           snapshot.put(key, true)
-          saved.saveSnapshot(account.id, feed, snapshot)
+          saved.saveSnapshot(account.id, feedName, snapshot)
         }
       }
-      if (todoSince == 0L) list.forEach { todo -> eventForTodo(account, todo)?.let { saved.record(it) } }
-      saved.advance(account.id, "todos", started)
+      if (todoSince == 0L) list.forEach { todo -> eventForTodo(account, todo, fallbackTime)?.let { saved.record(it) } }
+      val newestTodoMs = list.mapNotNull { parseGitLabMillis(it.createdAt) }.maxOrNull()
+      val nextCursor = resolveCursor(feed.serverTimeMs ?: sharedServerTime, newestTodoMs, todoSince, started)
+      saved.advance(account.id, "todos", nextCursor)
     }
-    authoredResult.getOrNull()?.let { list ->
+    authoredResult.getOrNull()?.let { feed ->
+      val list = feed.items
       val previous = saved.snapshot(account.id, "authored")
+      val fallbackTime = feed.serverTimeMs ?: sharedServerTime ?: started
       if (since > 0) list.sortedBy { it.updatedAt }.forEach { mr ->
         val old = previous.optString(mrKey(mr))
         val changedAt = parseGitLabMillis(if (mr.state == "merged") mr.mergedAt.orEmpty() else mr.closedAt ?: mr.updatedAt) ?: 0
@@ -178,32 +223,62 @@ object GitLabNotificationMonitor {
         }
         if (title != null) {
           val actor = (if (mr.state == "merged") mr.mergeUser ?: mr.mergedBy else mr.closedBy)?.let { it.name.ifBlank { it.username } }
-          deliver(context, saved, delivered, mrEvent(account, mr, "state:${mr.state}:${mr.mergedAt ?: mr.closedAt ?: mr.updatedAt}", title, GitLabNotifications.ACTIVITY, actor, changedAt.takeIf { it > 0 }))
+          deliver(context, saved, delivered, mrEvent(account, mr, "state:${mr.state}:${mr.mergedAt ?: mr.closedAt ?: mr.updatedAt}", title, GitLabNotifications.ACTIVITY, actor, changedAt.takeIf { it > 0 } ?: fallbackTime))
         }
       }
       list.forEach { previous.put(mrKey(it), it.state) }
       while (previous.length() > 2000) previous.remove(previous.keys().next())
       saved.saveSnapshot(account.id, "authored", previous)
-      saved.advance(account.id, "authored", started)
+      val newestAuthoredMs = list.flatMap { mr ->
+        listOfNotNull(
+          parseGitLabMillis(mr.updatedAt),
+          mr.mergedAt?.let(::parseGitLabMillis),
+          mr.closedAt?.let(::parseGitLabMillis),
+        )
+      }.maxOrNull()
+      val nextCursor = resolveCursor(feed.serverTimeMs ?: sharedServerTime, newestAuthoredMs, since, started)
+      saved.advance(account.id, "authored", nextCursor)
     }
-    listOf(assignedResult, reviewResult, todoResult, authoredResult).mapNotNull { result ->
+
+    val errors = listOf(assignedResult, reviewResult, todoResult, authoredResult).mapNotNull { result ->
       result.exceptionOrNull()?.let { error ->
-        FeedError(describe(error), retryable = error !is GitLabApiException || error.code == 429 || error.code >= 500)
+        FeedError(
+          message = describe(error),
+          retryable = error !is GitLabApiException || error.code == 429 || error.code >= 500,
+          unauthorized = error.isUnauthorizedError(),
+        )
       }
     }.distinctBy { it.message }
+
+    if (errors.any { it.unauthorized }) {
+      store.setAuthFailure(account.id, true)
+      if (!saved.isAuthFailureNotified(account.id) && GitLabNotifications.showAuthFailure(context, account)) {
+        saved.setAuthFailureNotified(account.id, true)
+      }
+    }
+    errors
   }
 
-  private fun processMembership(context: Context, saved: NotificationStore, delivered: AtomicInteger, account: GitLabInstance, feed: String, list: List<GitLabMergeRequest>, started: Long) {
+  private fun processMembership(
+    context: Context,
+    saved: NotificationStore,
+    delivered: AtomicInteger,
+    account: GitLabInstance,
+    feed: String,
+    list: List<GitLabMergeRequest>,
+    cursorMs: Long,
+    fallbackTimeMs: Long,
+  ) {
     val old = saved.snapshot(account.id, feed)
     if (saved.cursor(account.id, feed) > 0) list.forEach { mr ->
       if (!old.has(mrKey(mr))) {
-        deliver(context, saved, delivered, mrEvent(account, mr, "$feed:${mr.updatedAt}", if (feed == "review") "Review requested from you" else "Merge request assigned to you", GitLabNotifications.REVIEWS, at = parseGitLabMillis(mr.updatedAt)))
+        deliver(context, saved, delivered, mrEvent(account, mr, "$feed:${mr.updatedAt}", if (feed == "review") "Review requested from you" else "Merge request assigned to you", GitLabNotifications.REVIEWS, at = parseGitLabMillis(mr.updatedAt) ?: fallbackTimeMs))
       }
     }
     val next = JSONObject()
     list.forEach { next.put(mrKey(it), true) }
     saved.saveSnapshot(account.id, feed, next)
-    saved.advance(account.id, feed, started)
+    saved.advance(account.id, feed, cursorMs)
   }
 
   private fun deliver(context: Context, saved: NotificationStore, delivered: AtomicInteger, event: GitLabNotificationEvent) {
@@ -220,7 +295,7 @@ object GitLabNotificationMonitor {
       "MergeRequest", mr.projectId, mr.iid, mr.webUrl, channel, at ?: System.currentTimeMillis(), accountName = account.name)
   }
 
-  private fun eventForTodo(account: GitLabInstance, todo: GitLabTodo): GitLabNotificationEvent? {
+  private fun eventForTodo(account: GitLabInstance, todo: GitLabTodo, fallbackTimeMs: Long = System.currentTimeMillis()): GitLabNotificationEvent? {
     val title = when (todo.actionName) {
       "assigned" -> if (todo.targetType == "MergeRequest") "Merge request assigned to you" else "Issue assigned to you"
       "review_requested" -> "Review requested from you"
@@ -242,8 +317,21 @@ object GitLabNotificationMonitor {
     return GitLabNotificationEvent("todo:${todo.id}", account.id, title,
       listOf("$number$targetTitle", todo.project?.pathWithNamespace.orEmpty(), "From ${todo.author.name.ifBlank { todo.author.username }} · ${account.name}").filter { it.isNotBlank() }.joinToString("\n"),
       todo.targetType.orEmpty(), todo.target?.projectId ?: todo.project?.id ?: 0, todo.target?.iid ?: 0, todo.targetUrl.orEmpty(), channel,
-      parseGitLabMillis(todo.createdAt) ?: System.currentTimeMillis(), accountName = account.name)
+      parseGitLabMillis(todo.createdAt) ?: fallbackTimeMs, accountName = account.name, todoId = todo.id)
+  }
+
+  internal fun resolveCursor(
+    serverDateMs: Long?,
+    newestItemMs: Long?,
+    previousCursor: Long,
+    fallbackNowMs: Long,
+  ): Long {
+    val serverBest = listOfNotNull(serverDateMs, newestItemMs).maxOrNull()
+    if (serverBest != null) return maxOf(previousCursor, serverBest)
+    return if (previousCursor > 0L) previousCursor else fallbackNowMs
   }
 
   private fun iso(time: Long): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(Date(time))
+
+  private const val AUTH_EXPIRED_ERROR = "Sign in again to keep getting notifications"
 }

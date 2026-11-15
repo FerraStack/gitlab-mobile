@@ -153,14 +153,19 @@ fun MainScreen(viewModel: GitLabViewModel, onExit: () -> Unit) {
 
   LaunchedEffect(viewModel) {
     launch { viewModel.externalLinks.collect { openUrl(context, it) } }
+    var snackbarJob: kotlinx.coroutines.Job? = null
     viewModel.messages.collect { message ->
-      val result = snackbarHostState.showSnackbar(
-        message = message.text,
-        actionLabel = message.actionLabel,
-        withDismissAction = message.isError,
-        duration = if (message.isError || message.action != null) SnackbarDuration.Indefinite else SnackbarDuration.Short,
-      )
-      if (result == SnackbarResult.ActionPerformed) message.action?.invoke()
+      snackbarJob?.cancel()
+      snackbarHostState.currentSnackbarData?.dismiss()
+      snackbarJob = launch {
+        val result = snackbarHostState.showSnackbar(
+          message = message.text,
+          actionLabel = message.actionLabel,
+          withDismissAction = message.isError,
+          duration = if (message.isError) SnackbarDuration.Indefinite else SnackbarDuration.Short,
+        )
+        if (result == SnackbarResult.ActionPerformed) message.action?.invoke()
+      }
     }
   }
 
@@ -403,6 +408,7 @@ private fun Destination(
         state = uiState,
         onRefresh = { viewModel.refreshDashboard(userInitiated = true) },
         onFilterChange = viewModel::setInboxFilter,
+        onTypeFilterChange = viewModel::setInboxTypeFilter,
         onOpen = { notification -> viewModel.openNotification(notification)?.let(browser) },
         onMarkDone = viewModel::markNotificationDone,
         onMarkAllDone = viewModel::markAllNotificationsDone,

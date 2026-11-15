@@ -145,7 +145,7 @@ fun HomeScreen(
         return@LazyColumn
       }
 
-      if (state.sessionExpired) {
+      if (state.sessionExpired || state.activeInstance?.authFailure == true) {
         item(key = "expired") {
           SessionBanner(
             text = "Your session expired. Sign in again to keep loading data.",

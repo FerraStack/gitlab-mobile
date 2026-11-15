@@ -39,6 +39,8 @@ enum class PollOutcome(val label: String) {
   /** Another check was already running. */
   BUSY("Skipped, another check was running"),
   NO_ACCOUNTS("No signed-in accounts"),
+  /** Notifications are denied or disabled in Android settings, so network checks were skipped. */
+  NOTIFICATIONS_DISABLED("Skipped, notifications disabled"),
 }
 
 data class AccountPoll(
