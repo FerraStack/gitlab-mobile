@@ -187,7 +187,7 @@ class NotificationMonitorTest {
     assertTrue(GitLabNotificationMonitor.poll(app, PollTrigger.PERIODIC))
     val run3 = PollLog(app).runs().first()
     assertEquals(0, run3.delivered)
-    assertEquals(account.id, run3.accounts.single().id)
+    assertEquals(account.id, run3.accounts.single().accountId)
   }
 
   @Test
