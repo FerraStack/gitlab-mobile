@@ -18,7 +18,8 @@ data class GitLabInstance(
   val authKind: String = "",
   val refreshToken: String = "",
   val tokenExpiresAt: Long = 0L,
-  val oauthClientId: String = ""
+  val oauthClientId: String = "",
+  val authFailure: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)

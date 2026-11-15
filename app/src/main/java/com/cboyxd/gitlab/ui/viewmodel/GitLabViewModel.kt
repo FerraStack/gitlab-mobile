@@ -24,6 +24,8 @@ import com.cboyxd.gitlab.data.model.GitLabProject
 import com.cboyxd.gitlab.data.model.GitLabTodo
 import com.cboyxd.gitlab.data.repository.GitLabRepository
 import com.cboyxd.gitlab.data.storage.InstanceStore
+import com.cboyxd.gitlab.notifications.GitLabNotifications
+import com.cboyxd.gitlab.notifications.NotificationStore
 import com.cboyxd.gitlab.widget.GitLabWidgetProvider
 import com.cboyxd.gitlab.widget.WidgetPipelineSummary
 import com.cboyxd.gitlab.widget.WidgetStore
@@ -82,6 +84,10 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   fun setForeground(foreground: Boolean) {
     _foreground.value = foreground
   }
+  private val pendingDone = mutableMapOf<String, Job>()
+  private var pendingMarkAllJob: Job? = null
+  private var pendingMarkAllIds: Set<String> = emptySet()
+  internal var todoUndoDelayMs: Long = 5_000L
 
   private val host = object : SessionHost {
     override val repository: GitLabRepository get() = this@GitLabViewModel.repository
@@ -126,6 +132,11 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   private fun newSession() = CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext.job))
 
   private fun resetSession() {
+    pendingDone.values.forEach { it.cancel() }
+    pendingDone.clear()
+    pendingMarkAllJob?.cancel()
+    pendingMarkAllJob = null
+    pendingMarkAllIds = emptySet()
     session.cancel()
     session = newSession()
     navigationJob = null
@@ -400,9 +411,19 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
           )
         }
         launch {
-          api { repository.getTodos(it) }.fold(
+          val filters = currentTodoFilters()
+          api {
+            repository.getTodos(
+              it,
+              state = filters.state,
+              action = filters.action,
+              type = filters.type,
+              projectId = filters.projectId,
+              authorId = filters.authorId,
+            )
+          }.fold(
             onSuccess = { list ->
-              val mapped = list.map { todo -> todo.toNotification() }
+              val mapped = mapTodosWithPendingUndo(list)
               _uiState.update { s -> s.copy(notifications = s.notifications.success(mapped)) }
               syncWidgetTodos()
             },
@@ -443,13 +464,20 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       if (current?.id == instanceId && current.version.isBlank()) api { repository.getVersion(it) }.getOrNull() else null
     } else null
     val updated = runStorage {
+      var clearedAuthFailure = false
       store.patch(instanceId) { latest ->
+        if (!authFailed && latest.authFailure) clearedAuthFailure = true
         latest.copy(
           username = username?.takeIf { it.isNotBlank() } ?: latest.username,
           version = version?.takeIf { it.isNotBlank() } ?: latest.version,
-          statusOk = reachable && !authFailed
+          statusOk = reachable && !authFailed,
+          authFailure = authFailed,
         )
       } ?: return@runStorage null
+      if (clearedAuthFailure) {
+        NotificationStore(getApplication()).setAuthFailureNotified(instanceId, false)
+        GitLabNotifications.clearAuthFailure(getApplication(), instanceId)
+      }
       store.getInstances() to store.getActiveInstance()
     }.getOrNull() ?: return
     publishInstances(updated.first, updated.second)
@@ -469,6 +497,9 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     mergeRequests = emptyFeed(),
     pipelines = emptyFeed(),
     notifications = emptyFeed(),
+    inboxTypeFilter = InboxTypeFilter.ALL,
+    inboxProjectId = null,
+    inboxAuthorId = null,
     searchQuery = "",
     searchResults = emptyFeed(),
     group = GroupDetailState(),
@@ -519,6 +550,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       _uiState.update { clearedSessionState(it) }
     }
     GitLabApiClient.forget(instanceId)
+    GitLabNotifications.clearAuthFailure(getApplication(), instanceId)
     viewModelScope.launch {
       runStorage {
         val removed = store.getInstances().firstOrNull { it.id == instanceId } ?: snapshot
@@ -731,9 +763,11 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
           passwordLogin = null
           val fallbackClientId = _uiState.value.gitLabComClientId
           val saved = runStorage {
-            val candidate = draft.copy(username = probe.username, version = probe.version, statusOk = true)
+            val candidate = draft.copy(username = probe.username, version = probe.version, statusOk = true, authFailure = false)
             val replaced = store.findExistingAccount(candidate)
             val added = store.addInstance(candidate)
+            NotificationStore(getApplication()).setAuthFailureNotified(added.id, false)
+            GitLabNotifications.clearAuthFailure(getApplication(), added.id)
             val clientId = fallbackClientId.ifBlank { store.getGitLabComClientId() }
             SavedAccountResult(added, store.getInstances(), store.getActiveInstance(), replaced, clientId)
           }
@@ -1082,17 +1116,82 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  private data class TodoFilterArgs(
+    val state: String? = null,
+    val action: String? = null,
+    val type: String? = null,
+    val projectId: Long? = null,
+    val authorId: Long? = null,
+  )
+
+  private fun currentTodoFilters(s: GitLabUiState = _uiState.value): TodoFilterArgs {
+    val todoState = if (s.inboxFilter == InboxFilter.UNREAD) "pending" else null
+    return TodoFilterArgs(
+      state = todoState,
+      action = null,
+      type = s.inboxTypeFilter.apiType,
+      projectId = s.inboxProjectId,
+      authorId = s.inboxAuthorId,
+    )
+  }
+
+  private fun mapTodosWithPendingUndo(list: List<GitLabTodo>): List<GitLabNotification> {
+    val suppressed = pendingDone.keys + pendingMarkAllIds
+    return list.map { todo ->
+      val mapped = todo.toNotification()
+      if (mapped.id in suppressed) mapped.copy(isUnread = false) else mapped
+    }
+  }
+
   fun setInboxFilter(filter: InboxFilter) {
+    val changed = _uiState.value.inboxFilter != filter
     _uiState.update { it.copy(inboxFilter = filter) }
+    if (changed) refreshNotificationInbox()
+  }
+
+  fun setInboxTypeFilter(filter: InboxTypeFilter) {
+    val changed = _uiState.value.inboxTypeFilter != filter
+    _uiState.update { it.copy(inboxTypeFilter = filter) }
+    if (changed) refreshNotificationInbox()
+  }
+
+  fun setInboxProjectFilter(projectId: Long?) {
+    val changed = _uiState.value.inboxProjectId != projectId
+    _uiState.update { it.copy(inboxProjectId = projectId) }
+    if (changed) refreshNotificationInbox()
+  }
+
+  fun setInboxAuthorFilter(authorId: Long?) {
+    val changed = _uiState.value.inboxAuthorId != authorId
+    _uiState.update { it.copy(inboxAuthorId = authorId) }
+    if (changed) refreshNotificationInbox()
   }
 
   fun refreshNotificationInbox() {
     if (!_uiState.value.isSignedIn) return
+    val filters = currentTodoFilters()
     session.launch {
-      api { repository.getTodos(it) }.onSuccess { list ->
-        _uiState.update { it.copy(notifications = it.notifications.success(list.map { todo -> todo.toNotification() })) }
+      api {
+        repository.getTodos(
+          it,
+          state = filters.state,
+          action = filters.action,
+          type = filters.type,
+          projectId = filters.projectId,
+          authorId = filters.authorId,
+        )
+      }.onSuccess { list ->
+        val mapped = mapTodosWithPendingUndo(list)
+        _uiState.update { it.copy(notifications = it.notifications.success(mapped)) }
         syncWidgetTodos()
       }
+    }
+  }
+
+  fun openAccountsScreen() {
+    viewModelScope.launch {
+      _uiState.first { it.bootstrapped }
+      navigateTo(ScreenDestination.Instances)
     }
   }
 
@@ -1152,15 +1251,31 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     val current = _uiState.value.notifications.data.find { it.id == id } ?: return
     if (!current.isUnread) return
     val todoId = id.toLongOrNull() ?: return
+    if (id in pendingDone) return
     setNotificationUnread(id, false)
     syncWidgetTodos()
-    session.launch {
+    pendingDone[id] = session.launch {
+      delay(todoUndoDelayMs)
+      pendingDone.remove(id)
       api { repository.markTodoDone(it, todoId) }.onFailure { error ->
         setNotificationUnread(id, true)
         syncWidgetTodos()
         notifyError(error.userMessage())
       }
     }
+    _messages.trySend(
+      UiMessage(
+        text = "Marked as done",
+        actionLabel = "Undo",
+        action = { undoNotificationDone(id) },
+      )
+    )
+  }
+
+  fun undoNotificationDone(id: String) {
+    pendingDone.remove(id)?.cancel()
+    setNotificationUnread(id, true)
+    syncWidgetTodos()
   }
 
   private fun setNotificationUnread(id: String, unread: Boolean) {
@@ -1171,19 +1286,51 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
 
   fun markAllNotificationsDone() {
     val before = _uiState.value.notifications.data
-    if (before.none { it.isUnread }) return
-    _uiState.update { s -> s.copy(notifications = s.notifications.copy(data = s.notifications.data.map { it.copy(isUnread = false) })) }
-    syncWidgetTodos()
-    session.launch {
-      api { repository.markAllTodosDone(it) }.fold(
-        onSuccess = { notify("All to-dos marked as done") },
-        onFailure = { error ->
-          _uiState.update { s -> s.copy(notifications = s.notifications.copy(data = before)) }
-          syncWidgetTodos()
-          notifyError(error.userMessage())
-        }
-      )
+    val unreadIds = before.filter { it.isUnread }.map { it.id }.toSet()
+    if (unreadIds.isEmpty()) return
+    pendingMarkAllJob?.cancel()
+    pendingMarkAllIds = unreadIds
+    _uiState.update { s ->
+      s.copy(notifications = s.notifications.copy(data = s.notifications.data.map {
+        if (it.id in unreadIds) it.copy(isUnread = false) else it
+      }))
     }
+    syncWidgetTodos()
+    pendingMarkAllJob = session.launch {
+      delay(todoUndoDelayMs)
+      val committedIds = pendingMarkAllIds
+      pendingMarkAllIds = emptySet()
+      pendingMarkAllJob = null
+      api { repository.markAllTodosDone(it) }.onFailure { error ->
+        _uiState.update { s ->
+          s.copy(notifications = s.notifications.copy(data = s.notifications.data.map {
+            if (it.id in committedIds) it.copy(isUnread = true) else it
+          }))
+        }
+        syncWidgetTodos()
+        notifyError(error.userMessage())
+      }
+    }
+    _messages.trySend(
+      UiMessage(
+        text = "All to-dos marked as done",
+        actionLabel = "Undo",
+        action = { undoMarkAllNotificationsDone(unreadIds) },
+      )
+    )
+  }
+
+  fun undoMarkAllNotificationsDone(restoredIds: Set<String> = pendingMarkAllIds) {
+    pendingMarkAllJob?.cancel()
+    pendingMarkAllJob = null
+    pendingMarkAllIds = emptySet()
+    if (restoredIds.isEmpty()) return
+    _uiState.update { s ->
+      s.copy(notifications = s.notifications.copy(data = s.notifications.data.map {
+        if (it.id in restoredIds) it.copy(isUnread = true) else it
+      }))
+    }
+    syncWidgetTodos()
   }
 
   private fun syncWidgetTodos() {

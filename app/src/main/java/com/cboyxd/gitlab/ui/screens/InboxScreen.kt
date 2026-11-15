@@ -5,9 +5,12 @@ import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MergeType
 import androidx.compose.material.icons.outlined.PlayCircleOutline
+import com.cboyxd.gitlab.ui.components.GlButton
+import com.cboyxd.gitlab.ui.components.GlButtonKind
 import com.cboyxd.gitlab.ui.components.ListsDropdownFilter
 import com.cboyxd.gitlab.ui.components.ListsFilterBar
 import com.cboyxd.gitlab.ui.components.compactAge
+import com.cboyxd.gitlab.ui.viewmodel.InboxTypeFilter
 import com.cboyxd.gitlab.ui.viewmodel.NotificationType
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,17 +34,26 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -58,6 +70,8 @@ import com.cboyxd.gitlab.ui.components.GlFilterRow
 import com.cboyxd.gitlab.ui.components.GlIconAction
 import com.cboyxd.gitlab.ui.components.GlLargeHeader
 import com.cboyxd.gitlab.ui.components.InlineError
+import com.cboyxd.gitlab.ui.components.ListsDropdownFilter
+import com.cboyxd.gitlab.ui.components.ListsFilterBar
 import com.cboyxd.gitlab.ui.components.LoadingState
 import com.cboyxd.gitlab.ui.components.Tone
 import com.cboyxd.gitlab.ui.theme.Gl
@@ -65,6 +79,7 @@ import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.GitLabNotification
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.InboxFilter
+import com.cboyxd.gitlab.ui.viewmodel.InboxTypeFilter
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
 
 private val AssignedActions = setOf("assigned", "review_requested", "approval_required")
@@ -78,6 +93,7 @@ data class InboxUiSlice(
   val notifications: Loadable<List<GitLabNotification>>,
   val unreadCount: Int,
   val inboxFilter: InboxFilter,
+  val inboxTypeFilter: InboxTypeFilter = InboxTypeFilter.ALL,
 )
 
 @Composable
@@ -85,6 +101,7 @@ fun InboxScreen(
   state: GitLabUiState,
   onRefresh: () -> Unit,
   onFilterChange: (InboxFilter) -> Unit,
+  onTypeFilterChange: (InboxTypeFilter) -> Unit = {},
   onOpen: (GitLabNotification) -> Unit,
   onMarkDone: (String) -> Unit,
   onMarkAllDone: () -> Unit,
@@ -98,6 +115,7 @@ fun InboxScreen(
     state.notifications,
     state.unreadCount,
     state.inboxFilter,
+    state.inboxTypeFilter,
   ) {
     InboxUiSlice(
       activeInstance = state.activeInstance,
@@ -106,10 +124,12 @@ fun InboxScreen(
       notifications = state.notifications,
       unreadCount = state.unreadCount,
       inboxFilter = state.inboxFilter,
+      inboxTypeFilter = state.inboxTypeFilter,
     )
   },
   onRefresh = onRefresh,
   onFilterChange = onFilterChange,
+  onTypeFilterChange = onTypeFilterChange,
   onOpen = onOpen,
   onMarkDone = onMarkDone,
   onMarkAllDone = onMarkAllDone,
@@ -123,6 +143,7 @@ fun InboxScreen(
   state: InboxUiSlice,
   onRefresh: () -> Unit,
   onFilterChange: (InboxFilter) -> Unit,
+  onTypeFilterChange: (InboxTypeFilter) -> Unit = {},
   onOpen: (GitLabNotification) -> Unit,
   onMarkDone: (String) -> Unit,
   onMarkAllDone: () -> Unit,
@@ -132,13 +153,21 @@ fun InboxScreen(
   val feed = state.notifications
   val unread = state.unreadCount
   val filter = state.inboxFilter
+  val typeFilter = state.inboxTypeFilter
+  var confirmMarkAll by remember { mutableStateOf(false) }
   val visible = feed.data.filter { n ->
-    when (filter) {
+    val matchesShow = when (filter) {
       InboxFilter.ALL -> true
       InboxFilter.UNREAD -> n.isUnread
       InboxFilter.ASSIGNED -> n.actionName in AssignedActions
       InboxFilter.MENTIONED -> n.actionName in MentionActions
     }
+    val matchesType = when (typeFilter) {
+      InboxTypeFilter.ALL -> true
+      InboxTypeFilter.ISSUE -> n.targetType == "Issue"
+      InboxTypeFilter.MERGE_REQUEST -> n.targetType == "MergeRequest"
+    }
+    matchesShow && matchesType
   }
 
   Column(modifier = modifier.fillMaxSize().background(Gl.colors.bg)) {
@@ -147,7 +176,7 @@ fun InboxScreen(
         GlIconAction(
           icon = Icons.Outlined.DoneAll,
           contentDescription = "Mark all as done",
-          onClick = onMarkAllDone,
+          onClick = { confirmMarkAll = true },
           enabled = unread > 0,
         )
       }
@@ -172,6 +201,14 @@ fun InboxScreen(
         label = { it.label },
         onSelect = onFilterChange,
         active = filter != InboxFilter.ALL,
+      )
+      ListsDropdownFilter(
+        name = "Type",
+        options = InboxTypeFilter.entries,
+        selected = typeFilter,
+        label = { it.label },
+        onSelect = onTypeFilterChange,
+        active = typeFilter != InboxTypeFilter.ALL,
       )
       if (unread > 0) {
         Text(
@@ -216,7 +253,7 @@ fun InboxScreen(
             }
           }
           items(visible, key = { it.id }) { notification ->
-            NotificationRow(
+            SwipeableNotificationRow(
               notification = notification,
               onClick = { onOpen(notification) },
               onMarkDone = { onMarkDone(notification.id) },
@@ -226,6 +263,80 @@ fun InboxScreen(
         }
       }
     }
+  }
+
+  if (confirmMarkAll) {
+    val countLabel = if (unread == 1) "1 unread to-do" else "$unread unread to-dos"
+    AlertDialog(
+      onDismissRequest = { confirmMarkAll = false },
+      containerColor = Gl.colors.surface,
+      title = { Text("Mark all to-dos as done?", style = Gl.type.sectionTitle, color = Gl.colors.textPrimary) },
+      text = {
+        Text(
+          "This will mark $countLabel as done.",
+          style = Gl.type.bodySmall,
+          color = Gl.colors.textSecondary,
+        )
+      },
+      confirmButton = {
+        GlButton(
+          text = "Mark all done",
+          onClick = {
+            confirmMarkAll = false
+            onMarkAllDone()
+          },
+        )
+      },
+      dismissButton = {
+        GlButton(text = "Cancel", kind = GlButtonKind.Ghost, onClick = { confirmMarkAll = false })
+      },
+    )
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableNotificationRow(
+  notification: GitLabNotification,
+  onClick: () -> Unit,
+  onMarkDone: () -> Unit,
+) {
+  val currentOnMarkDone by rememberUpdatedState(onMarkDone)
+  val dismissState = rememberSwipeToDismissBoxState(
+    confirmValueChange = { value ->
+      if (value == SwipeToDismissBoxValue.EndToStart) {
+        currentOnMarkDone()
+      }
+      false
+    },
+  )
+  SwipeToDismissBox(
+    state = dismissState,
+    enableDismissFromStartToEnd = false,
+    enableDismissFromEndToStart = notification.isUnread,
+    gesturesEnabled = notification.isUnread,
+    modifier = Modifier.testTag("inbox_item_${notification.id}"),
+    backgroundContent = {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Gl.colors.accentBg)
+          .padding(horizontal = GlSpace.margin),
+        contentAlignment = Alignment.CenterEnd,
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Icon(Icons.Outlined.Check, contentDescription = null, tint = Gl.colors.accent)
+          Spacer(Modifier.width(6.dp))
+          Text("Done", style = Gl.type.label, color = Gl.colors.accent)
+        }
+      }
+    },
+  ) {
+    NotificationRow(
+      notification = notification,
+      onClick = onClick,
+      onMarkDone = onMarkDone,
+    )
   }
 }
 
@@ -252,6 +363,7 @@ private fun NotificationRow(
   Row(
     modifier = Modifier
       .fillMaxWidth()
+      .background(c.bg)
       .clickable(onClick = onClick, role = Role.Button, onClickLabel = "Open")
       .defaultMinSize(minHeight = 72.dp)
       .padding(start = 8.dp, end = 4.dp, top = 14.dp, bottom = 14.dp),
