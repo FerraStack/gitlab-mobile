@@ -1,11 +1,18 @@
 package com.cboyxd.gitlab.ui.viewmodel
 
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.GitLabMergeRequestUpdate
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
-/** Merge request detail: overview, discussion, commits, pipelines, approvals and changes. */
+/** Merge request detail: overview, discussion, commits, pipelines, approvals, triage and changes. */
 class ReviewFeature internal constructor(
   private val host: SessionHost,
   private val labels: (Long) -> Unit,
@@ -83,8 +90,32 @@ class ReviewFeature internal constructor(
             discussionsTruncated = slice?.truncated == true,
           )
         }
-        val previews = slice?.items?.let { threads -> host.api { Result.success(repo.getDiscussionDiffs(it, projectId, threads)) }.getOrDefault(emptyMap()) }.orEmpty()
-        if (previews.isNotEmpty()) apply(projectId, iid) { it.copy(discussionDiffs = previews) }
+        val threads = slice?.items
+        if (threads != null) {
+          val noteIds = threads.flatMap { it.notes }.filterNot { it.system }.map { it.id }.distinct()
+          if (noteIds.isNotEmpty()) {
+            launch {
+              val gate = Semaphore(6)
+              val awards = coroutineScope {
+                noteIds.map { noteId ->
+                  async {
+                    gate.withPermit {
+                      host.api { repo.getMergeRequestNoteAwardEmojis(it, projectId, iid, noteId) }
+                        .getOrNull()?.let { noteId to it }
+                    }
+                  }
+                }.awaitAll().filterNotNull().toMap()
+              }
+              if (awards.isNotEmpty()) apply(projectId, iid) { it.copy(noteAwardEmojis = it.noteAwardEmojis + awards) }
+            }
+          }
+          val previews = host.api { Result.success(repo.getDiscussionDiffs(it, projectId, threads)) }.getOrDefault(emptyMap())
+          if (previews.isNotEmpty()) apply(projectId, iid) { it.copy(discussionDiffs = previews) }
+        }
+      }
+      launch {
+        val r = host.api { repo.getMergeRequestAwardEmojis(it, projectId, iid) }
+        r.onSuccess { awards -> apply(projectId, iid) { it.copy(awardEmojis = awards, awardEmojisLoaded = true) } }
       }
       launch { val r = host.api { repo.getMergeRequestCommits(it, projectId, iid) }; apply(projectId, iid) { it.copy(commits = it.commits.settle(r)) } }
       launch { val r = host.api { repo.getMergeRequestPipelines(it, projectId, iid) }; apply(projectId, iid) { it.copy(pipelines = it.pipelines.settle(r)) } }
@@ -349,15 +380,141 @@ class ReviewFeature internal constructor(
     }
   }
 
+  /** Updates MR title, description, assignees, reviewers, labels, or milestone. */
+  fun updateMergeRequest(update: GitLabMergeRequestUpdate, onResult: ((String?) -> Unit)? = null) {
+    val mr = detail.mergeRequest.data ?: return
+    if (detail.busy) {
+      val msg = "An update is already in progress."
+      if (onResult != null) onResult(msg) else host.notifyError(msg)
+      return
+    }
+    apply(mr.projectId, mr.iid) { it.copy(busy = true) }
+    host.session.launch {
+      host.api { host.repository.updateMergeRequest(it, mr.projectId, mr.iid, update) }.fold(
+        onSuccess = { updated ->
+          replace(updated)
+          onResult?.invoke(null)
+          host.notify("Merge request updated")
+        },
+        onFailure = { error ->
+          apply(mr.projectId, mr.iid) { it.copy(busy = false) }
+          val message = error.userMessage()
+          if (onResult != null) onResult(message) else host.notifyError(message)
+        },
+      )
+    }
+  }
+
+  /** Adds or removes an emoji reaction on the merge request itself. */
+  fun toggleReaction(name: String) {
+    val mr = detail.mergeRequest.data ?: return
+    val key = "mr:$name"
+    if (key in detail.togglingReactions) return
+    val existing = detail.awardEmojis.firstOrNull { it.name == name && isCurrentUsersAward(it) }
+    apply(mr.projectId, mr.iid) { it.copy(togglingReactions = it.togglingReactions + key) }
+    val repo = host.repository
+    host.session.launch {
+      if (existing != null) {
+        host.api { repo.deleteMergeRequestAwardEmoji(it, mr.projectId, mr.iid, existing.id) }.fold(
+          onSuccess = {
+            apply(mr.projectId, mr.iid) { d ->
+              d.copy(
+                awardEmojis = d.awardEmojis.filterNot { it.id == existing.id },
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            apply(mr.projectId, mr.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            host.notifyError(error.userMessage())
+          },
+        )
+      } else {
+        host.api { repo.addMergeRequestAwardEmoji(it, mr.projectId, mr.iid, name) }.fold(
+          onSuccess = { added ->
+            apply(mr.projectId, mr.iid) { d ->
+              d.copy(
+                awardEmojis = (d.awardEmojis.filterNot { it.id == added.id } + added),
+                awardEmojisLoaded = true,
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            apply(mr.projectId, mr.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            host.notifyError(error.userMessage())
+          },
+        )
+      }
+    }
+  }
+
+  /** Adds or removes an emoji reaction on a merge request comment/note. */
+  fun toggleNoteReaction(noteId: Long, name: String) {
+    val mr = detail.mergeRequest.data ?: return
+    val key = "note:$noteId:$name"
+    if (key in detail.togglingReactions) return
+    val existing = detail.noteAwardEmojis[noteId].orEmpty().firstOrNull { it.name == name && isCurrentUsersAward(it) }
+    apply(mr.projectId, mr.iid) { it.copy(togglingReactions = it.togglingReactions + key) }
+    val repo = host.repository
+    host.session.launch {
+      if (existing != null) {
+        host.api { repo.deleteMergeRequestNoteAwardEmoji(it, mr.projectId, mr.iid, noteId, existing.id) }.fold(
+          onSuccess = {
+            apply(mr.projectId, mr.iid) { d ->
+              val updated = d.noteAwardEmojis[noteId].orEmpty().filterNot { it.id == existing.id }
+              d.copy(
+                noteAwardEmojis = d.noteAwardEmojis + (noteId to updated),
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            apply(mr.projectId, mr.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            host.notifyError(error.userMessage())
+          },
+        )
+      } else {
+        host.api { repo.addMergeRequestNoteAwardEmoji(it, mr.projectId, mr.iid, noteId, name) }.fold(
+          onSuccess = { added ->
+            apply(mr.projectId, mr.iid) { d ->
+              val updated = d.noteAwardEmojis[noteId].orEmpty().filterNot { it.id == added.id } + added
+              d.copy(
+                noteAwardEmojis = d.noteAwardEmojis + (noteId to updated),
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            apply(mr.projectId, mr.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            host.notifyError(error.userMessage())
+          },
+        )
+      }
+    }
+  }
+
+  private fun isCurrentUsersAward(award: GitLabAwardEmoji): Boolean {
+    val s = host.state.value
+    val uid = s.currentUser.data?.id ?: 0L
+    val uname = (s.currentUser.data?.username ?: s.activeInstance?.username).orEmpty()
+    return (uid > 0L && award.user.id == uid) || (uname.isNotBlank() && award.user.username.equals(uname, ignoreCase = true))
+  }
+
   private fun replace(updated: GitLabMergeRequest) {
     host.state.update { s ->
-      fun List<GitLabMergeRequest>.swap() = map { if (it.projectId == updated.projectId && it.iid == updated.iid) updated else it }
+      val currentDetail = s.mergeRequestDetail
+      val labelMap = s.labels[updated.projectId].orEmpty() + currentDetail.mergeRequest.data?.labelDetails.orEmpty().associateBy { it.name }
+      val withColors = if (updated.labelDetails.isEmpty() && updated.labels.isNotEmpty()) {
+        updated.copy(labelDetails = updated.labels.mapNotNull { labelMap[it] })
+      } else updated
+      fun List<GitLabMergeRequest>.swap() = map { if (it.projectId == withColors.projectId && it.iid == withColors.iid) withColors else it }
       s.copy(
         mergeRequests = s.mergeRequests.copy(data = s.mergeRequests.data.swap()),
         project = s.project.copy(mergeRequests = s.project.mergeRequests.copy(data = s.project.mergeRequests.data.swap())),
-        mergeRequestDetail = if (s.mergeRequestDetail.projectId == updated.projectId && s.mergeRequestDetail.iid == updated.iid) {
-          s.mergeRequestDetail.copy(mergeRequest = s.mergeRequestDetail.mergeRequest.success(updated), busy = false)
-        } else s.mergeRequestDetail,
+        mergeRequestDetail = if (currentDetail.projectId == withColors.projectId && currentDetail.iid == withColors.iid) {
+          currentDetail.copy(mergeRequest = currentDetail.mergeRequest.success(withColors), busy = false)
+        } else currentDetail,
       )
     }
   }

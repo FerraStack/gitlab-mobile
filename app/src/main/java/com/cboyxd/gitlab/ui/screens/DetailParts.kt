@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Share
@@ -43,12 +46,14 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
 import com.cboyxd.gitlab.ui.components.GlIconAction
 import com.cboyxd.gitlab.ui.components.StatusStyle
 import com.cboyxd.gitlab.ui.components.Tone
@@ -253,20 +258,184 @@ internal fun BoxScope.DetailFloatingActions(onComment: (() -> Unit)?, onInfo: ()
 
 /** Small round count chip for reactions (👍 3). */
 @Composable
-internal fun DetailReactionChip(emoji: String, count: Int, description: String) {
+internal fun DetailReactionChip(
+  emoji: String,
+  count: Int,
+  description: String,
+  selected: Boolean = false,
+  enabled: Boolean = true,
+  onClick: (() -> Unit)? = null,
+) {
   val c = Gl.colors
+  val bg = if (selected) c.accentBg else c.surface2
+  val border = if (selected) c.accent else c.border
+  val fg = if (selected) c.accent else c.textPrimary
   Row(
     modifier = Modifier
       .clip(CircleShape)
-      .background(c.surface2)
-      .border(1.dp, c.border, CircleShape)
+      .background(bg)
+      .border(1.dp, border, CircleShape)
+      .then(
+        if (onClick != null) {
+          Modifier.clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick)
+        } else Modifier
+      )
       .padding(horizontal = 10.dp, vertical = 4.dp)
       .semantics(mergeDescendants = true) { contentDescription = description },
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Text(emoji, style = Gl.type.bodySmall)
     Spacer(Modifier.width(6.dp))
-    Text(count.toString(), style = Gl.type.numeric, color = c.textPrimary)
+    Text(count.toString(), style = Gl.type.numeric, color = fg)
+  }
+}
+
+internal data class QuickReaction(val name: String, val emoji: String, val label: String)
+
+internal val QUICK_REACTIONS = listOf(
+  QuickReaction("thumbsup", "👍", "Thumbs up"),
+  QuickReaction("thumbsdown", "👎", "Thumbs down"),
+  QuickReaction("laughing", "😄", "Laugh"),
+  QuickReaction("tada", "🎉", "Hooray"),
+  QuickReaction("confused", "😕", "Confused"),
+  QuickReaction("heart", "❤️", "Heart"),
+  QuickReaction("rocket", "🚀", "Rocket"),
+  QuickReaction("eyes", "👀", "Eyes"),
+)
+
+internal fun awardEmojiGlyph(name: String): String = when (name) {
+  "thumbsup", "+1" -> "👍"
+  "thumbsdown", "-1" -> "👎"
+  "laughing", "smile", "grinning" -> "😄"
+  "smiley" -> "😃"
+  "tada" -> "🎉"
+  "confused" -> "😕"
+  "heart" -> "❤️"
+  "rocket" -> "🚀"
+  "eyes" -> "👀"
+  "100" -> "💯"
+  "fire" -> "🔥"
+  "clap" -> "👏"
+  "star" -> "⭐"
+  "white_check_mark" -> "✅"
+  else -> ":$name:"
+}
+
+internal data class ReactionSummary(
+  val name: String,
+  val emoji: String,
+  val count: Int,
+  val reactedByMe: Boolean,
+)
+
+internal fun summarizeReactions(
+  awards: List<GitLabAwardEmoji>,
+  currentUsername: String? = null,
+  currentUserId: Long = 0L,
+  fallbackUpvotes: Int = 0,
+  fallbackDownvotes: Int = 0,
+  awardsLoaded: Boolean = false,
+): List<ReactionSummary> {
+  if (!awardsLoaded && awards.isEmpty()) {
+    return buildList {
+      if (fallbackUpvotes > 0) add(ReactionSummary("thumbsup", "👍", fallbackUpvotes, reactedByMe = false))
+      if (fallbackDownvotes > 0) add(ReactionSummary("thumbsdown", "👎", fallbackDownvotes, reactedByMe = false))
+    }
+  }
+  return awards.groupBy { it.name }.map { (name, items) ->
+    val byMe = items.any { award ->
+      (currentUserId > 0L && award.user.id == currentUserId) ||
+        (!currentUsername.isNullOrBlank() && award.user.username.equals(currentUsername, ignoreCase = true))
+    }
+    ReactionSummary(
+      name = name,
+      emoji = awardEmojiGlyph(name),
+      count = items.size,
+      reactedByMe = byMe,
+    )
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun ReactionRow(
+  reactions: List<ReactionSummary>,
+  busyKeys: Set<String>,
+  keyPrefix: String,
+  canReact: Boolean,
+  onToggle: ((String) -> Unit)?,
+  modifier: Modifier = Modifier,
+) {
+  val showPicker = canReact && onToggle != null
+  if (reactions.isEmpty() && !showPicker) return
+  val c = Gl.colors
+  var pickerOpen by remember { mutableStateOf(false) }
+  FlowRow(
+    modifier = modifier,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    reactions.forEach { reaction ->
+      val busy = "$keyPrefix:${reaction.name}" in busyKeys
+      val desc = buildString {
+        append("${reaction.name}: ${reaction.count}")
+        if (reaction.reactedByMe) append(", reacted")
+      }
+      DetailReactionChip(
+        emoji = reaction.emoji,
+        count = reaction.count,
+        description = desc,
+        selected = reaction.reactedByMe,
+        enabled = canReact && onToggle != null && !busy,
+        onClick = if (canReact && onToggle != null) ({ onToggle(reaction.name) }) else null,
+      )
+    }
+    if (showPicker) {
+      Box {
+        Row(
+          modifier = Modifier
+            .clip(CircleShape)
+            .background(c.surface2)
+            .border(1.dp, c.border, CircleShape)
+            .clickable(role = Role.Button, onClickLabel = "Add reaction") { pickerOpen = true }
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .testTag("${keyPrefix}_add_reaction"),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Icon(
+            Icons.Outlined.Add,
+            contentDescription = "Add reaction",
+            tint = c.textSecondary,
+            modifier = Modifier.size(16.dp),
+          )
+        }
+        DropdownMenu(
+          expanded = pickerOpen,
+          onDismissRequest = { pickerOpen = false },
+          containerColor = c.surface2,
+        ) {
+          QUICK_REACTIONS.forEach { item ->
+            val active = reactions.any { it.name == item.name && it.reactedByMe }
+            DropdownMenuItem(
+              text = {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                  Text(item.emoji, style = Gl.type.body)
+                  Text(item.label, style = Gl.type.body, color = if (active) c.accent else c.textPrimary)
+                }
+              },
+              enabled = "$keyPrefix:${item.name}" !in busyKeys,
+              onClick = {
+                pickerOpen = false
+                onToggle?.invoke(item.name)
+              },
+            )
+          }
+        }
+      }
+    }
   }
 }
 

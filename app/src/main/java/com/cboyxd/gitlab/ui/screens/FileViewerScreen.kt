@@ -109,7 +109,9 @@ fun FileViewerScreen(
   val isMarkdown = extension in MARKDOWN_EXTENSIONS
   val ref = state.ref ?: "HEAD"
   val content = state.content.data
-  val blobUrl = webUrl?.let { "$it/-/blob/$ref/${state.path}" }
+  val isSnippet = state.snippetId != null
+  val blobUrl = if (isSnippet) state.snippetWebUrl else webUrl?.let { "$it/-/blob/$ref/${state.path}" }
+  val rawUrl = if (isSnippet) state.snippetWebUrl?.let { "$it/raw" } else webUrl?.let { "$it/-/raw/$ref/${state.path}" }
   var preview by rememberSaveable(state.path) { mutableStateOf(true) }
   var wrap by rememberSaveable { mutableStateOf(true) }
   // Selection as 1-based line numbers; start is the first tap, end the second.
@@ -182,12 +184,12 @@ fun FileViewerScreen(
           GlIconAction(Icons.Outlined.Share, "Share", onClick = { shareText(context, blobUrl, title = name) })
         }
         FileMenu(
-          canOpen = webUrl != null,
+          canOpen = blobUrl != null,
           canCopy = !content.isNullOrEmpty() && !isImage,
           wrap = wrap,
           showWrap = showingCode,
           onOpenInBrowser = { blobUrl?.let(onOpenInBrowser) },
-          onOpenRaw = { webUrl?.let { onOpenInBrowser("$it/-/raw/$ref/${state.path}") } },
+          onOpenRaw = { rawUrl?.let(onOpenInBrowser) },
           onCopyPath = { clipboard.setText(AnnotatedString(state.path)) },
           onCopyContents = { content?.let { clipboard.setText(AnnotatedString(it)) } },
           onToggleWrap = { wrap = !wrap },
@@ -197,12 +199,12 @@ fun FileViewerScreen(
     GlDivider()
 
     when {
-      isImage && webUrl != null -> Box(
+      isImage && !isSnippet && rawUrl != null -> Box(
         modifier = Modifier.fillMaxSize().padding(GlSpace.margin),
         contentAlignment = Alignment.Center,
       ) {
         AsyncImage(
-          model = rememberImageModel("$webUrl/-/raw/$ref/${state.path}"),
+          model = rememberImageModel(rawUrl),
           contentDescription = name,
           contentScale = ContentScale.Fit,
           modifier = Modifier

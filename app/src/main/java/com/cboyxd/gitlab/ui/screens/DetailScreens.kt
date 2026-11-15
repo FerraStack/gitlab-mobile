@@ -45,6 +45,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -80,6 +81,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -88,13 +90,17 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -115,6 +121,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.cboyxd.gitlab.data.model.DiffLineAnchor
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
 import com.cboyxd.gitlab.data.model.GitLabFileDiff
 import com.cboyxd.gitlab.ui.components.DiffKind
 import com.cboyxd.gitlab.ui.components.DiffLine
@@ -128,8 +135,11 @@ import com.cboyxd.gitlab.data.model.GitLabDiscussion
 import com.cboyxd.gitlab.data.model.resolvable
 import com.cboyxd.gitlab.data.model.resolved
 import com.cboyxd.gitlab.data.model.GitLabIssue
+import com.cboyxd.gitlab.data.model.GitLabIssueUpdate
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.GitLabMergeRequestUpdate
+import com.cboyxd.gitlab.data.model.GitLabMilestone
 import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.ui.components.DiscussionDiffPreview
 import com.cboyxd.gitlab.data.model.GitLabNote
@@ -169,6 +179,7 @@ import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.IssueDetailState
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
 import com.cboyxd.gitlab.ui.viewmodel.MergeRequestDetailState
+import com.cboyxd.gitlab.ui.viewmodel.emptyFeed
 import java.util.Locale
 
 /** Room under the list for the floating COMMENT and details buttons. */
@@ -177,6 +188,8 @@ private val FloatingActionsClearance = 96.dp
 // ---------------------------------------------------------------------------------------------
 // Issue detail
 // ---------------------------------------------------------------------------------------------
+
+private enum class TriageTarget { ASSIGNEES, REVIEWERS, LABELS, MILESTONE }
 
 /**
  * An issue laid out like GitHub Mobile's: path and number, a big title with a filled state pill,
@@ -198,12 +211,27 @@ fun IssueDetailScreen(
   onOpenInBrowser: (String) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  currentUsername: String? = null,
+  currentUserId: Long = 0L,
+  drafts: Map<String, String> = emptyMap(),
+  onDraftChange: (String, String) -> Unit = { _, _ -> },
+  onClearDraft: ((String) -> Unit)? = null,
+  onToggleReaction: ((String) -> Unit)? = null,
+  onToggleNoteReaction: ((Long, String) -> Unit)? = null,
+  projectMembers: Loadable<List<GitLabUser>> = emptyFeed(),
+  projectMilestones: Loadable<List<GitLabMilestone>> = emptyFeed(),
+  onLoadTriageData: () -> Unit = {},
+  onTriage: (GitLabIssueUpdate, (String?) -> Unit) -> Unit = { _, _ -> },
 ) {
   val c = Gl.colors
   val issue = state.issue.data
   var editing by rememberSaveable { mutableStateOf(false) }
   var composing by rememberSaveable { mutableStateOf(false) }
   var showInfo by rememberSaveable { mutableStateOf(false) }
+  var triageTarget by rememberSaveable { mutableStateOf<TriageTarget?>(null) }
+  LaunchedEffect(showInfo, triageTarget, canWrite) {
+    if (canWrite && (showInfo || triageTarget != null)) onLoadTriageData()
+  }
   val clipboard = LocalClipboardManager.current
   val context = remember(issue?.webUrl, onLink) {
     MarkdownContext(webBase = issue?.webUrl?.substringBefore("/-/")?.takeIf { it.isNotBlank() }, rawBase = null, onLink = onLink)
@@ -265,7 +293,20 @@ fun IssueDetailScreen(
             ) {
               val tasks = issue.taskStatus
               if (tasks != null && tasks.count > 0) TaskProgress(tasks.completedCount, tasks.count)
-              Reactions(issue.upvotes, issue.downvotes)
+              ReactionRow(
+                reactions = summarizeReactions(
+                  awards = state.awardEmojis,
+                  currentUsername = currentUsername,
+                  currentUserId = currentUserId,
+                  fallbackUpvotes = issue.upvotes,
+                  fallbackDownvotes = issue.downvotes,
+                  awardsLoaded = state.awardEmojisLoaded,
+                ),
+                busyKeys = state.togglingReactions,
+                keyPrefix = "issue",
+                canReact = canWrite,
+                onToggle = onToggleReaction,
+              )
             }
           }
           item(key = "timeline-header") { DetailSectionHeader("Activity") }
@@ -277,6 +318,12 @@ fun IssueDetailScreen(
             onOpenUser = onOpenUser,
             onRetry = onRetry,
             guest = !canWrite,
+            noteAwardEmojis = state.noteAwardEmojis,
+            togglingReactions = state.togglingReactions,
+            currentUsername = currentUsername,
+            currentUserId = currentUserId,
+            canReact = canWrite,
+            onToggleNoteReaction = onToggleNoteReaction,
           )
         }
         DetailFloatingActions(
@@ -291,28 +338,75 @@ fun IssueDetailScreen(
     EditIssueDialog(issue, context, onDismiss = { editing = false }, onSave = onEdit)
   }
   if (composing) {
+    val draftKey = "issue:${state.projectId}:${state.iid}:comment"
     CommentSheet(
       posting = state.posting,
       previewContext = context,
       onDismiss = { composing = false },
       onSubmit = onComment,
+      draftKey = draftKey,
+      savedDraft = drafts[draftKey].orEmpty(),
+      onDraftChange = { onDraftChange(draftKey, it) },
+      onClearDraft = if (onClearDraft != null) ({ onClearDraft(draftKey) }) else null,
     )
   }
-  if (showInfo && issue != null) {
+  if (showInfo && triageTarget == null && issue != null) {
     InfoSheet(title = "Details", onDismiss = { showInfo = false }) {
-      issueMetaRows(issue, labels, onOpenUser).forEach { (label, content) -> MetaRow(label, content) }
+      MetaRow(
+        label = "Assignees",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.ASSIGNEES },
+      ) {
+        if (issue.assignees.isEmpty()) MetaValue("No one") else PeopleList(issue.assignees, onOpenUser)
+      }
+      MetaRow(
+        label = "Labels",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.LABELS },
+      ) {
+        if (issue.labels.isEmpty()) MetaValue("None") else LabelRow(issue.labels, labels)
+      }
+      MetaRow(
+        label = "Milestone",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.MILESTONE },
+      ) {
+        MetaValue(issue.milestone?.title?.takeIf { it.isNotBlank() } ?: "None")
+      }
+      issueMetaRows(issue).forEach { (label, content) -> MetaRow(label, content = content) }
+    }
+  }
+  if (triageTarget != null && issue != null) {
+    when (triageTarget) {
+      TriageTarget.ASSIGNEES -> MemberPickerDialog(
+        title = "Assignees",
+        members = projectMembers,
+        selected = issue.assignees,
+        onRetry = onLoadTriageData,
+        onDismiss = { triageTarget = null },
+        onSave = { ids, done -> onTriage(GitLabIssueUpdate(assigneeIds = ids), done) },
+      )
+      TriageTarget.LABELS -> LabelPickerDialog(
+        availableLabels = labels,
+        currentLabels = issue.labels,
+        onDismiss = { triageTarget = null },
+        onSave = { add, remove, done -> onTriage(GitLabIssueUpdate(addLabels = add, removeLabels = remove), done) },
+      )
+      TriageTarget.MILESTONE -> MilestonePickerDialog(
+        milestones = projectMilestones,
+        current = issue.milestone,
+        onRetry = onLoadTriageData,
+        onDismiss = { triageTarget = null },
+        onSave = { id, done -> onTriage(GitLabIssueUpdate(milestoneId = id), done) },
+      )
+      TriageTarget.REVIEWERS, null -> Unit
     }
   }
 }
 
 private fun issueMetaRows(
   issue: GitLabIssue,
-  labels: Map<String, GitLabLabel>,
-  onOpenUser: (GitLabUser) -> Unit,
 ): List<Pair<String, @Composable () -> Unit>> = buildList {
-  add("Assignees" to { if (issue.assignees.isEmpty()) MetaValue("No one") else PeopleList(issue.assignees, onOpenUser) })
-  add("Labels" to { if (issue.labels.isEmpty()) MetaValue("None") else LabelRow(issue.labels, labels) })
-  add("Milestone" to { MetaValue(issue.milestone?.title?.takeIf { it.isNotBlank() } ?: "None") })
   issue.dueDate?.takeIf { it.isNotBlank() }?.let { add("Due date" to { MetaValue(it) }) }
   issue.weight?.let { add("Weight" to { MetaValue(it.toString()) }) }
   val time = issue.timeStats
@@ -329,6 +423,7 @@ private fun issueMetaRows(
   }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EditIssueDialog(
   issue: GitLabIssue,
@@ -338,62 +433,154 @@ private fun EditIssueDialog(
 ) {
   val c = Gl.colors
   var title by rememberSaveable(issue.id) { mutableStateOf(issue.title) }
-  var description by remember(issue.id) { mutableStateOf(TextFieldValue(issue.description.orEmpty())) }
+  var description by rememberSaveable(issue.id, stateSaver = TextFieldValue.Saver) {
+    mutableStateOf(TextFieldValue(issue.description.orEmpty()))
+  }
   var saving by remember { mutableStateOf(false) }
   var error by remember { mutableStateOf<String?>(null) }
   var titleError by remember { mutableStateOf(false) }
-  AlertDialog(
+  ModalBottomSheet(
     onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
     containerColor = c.surface,
-    title = { Text("Edit issue", style = Gl.type.title, color = c.textPrimary) },
-    text = {
-      Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        OutlinedTextField(
-          value = title,
-          onValueChange = { title = it; titleError = false },
-          label = { Text("Title") },
-          isError = titleError,
-          supportingText = if (titleError) ({ Text("Enter a title") }) else null,
-          singleLine = true,
-          enabled = !saving,
-          colors = fieldColors(),
-          modifier = Modifier.fillMaxWidth(),
-        )
-        MarkdownEditor(
-          value = description,
-          onValueChange = { description = it },
-          label = "Description",
-          minLines = 4,
-          maxLines = 10,
-          enabled = !saving,
-          previewContext = context,
-        )
-        error?.let { InlineError(it) }
-      }
-    },
-    confirmButton = {
-      GlButton(
-        text = "Save changes",
-        loading = saving,
-        onClick = {
-          if (title.isBlank()) {
-            titleError = true
-          } else {
-            saving = true
-            error = null
-            onSave(title, description.text) { result ->
-              saving = false
-              if (result == null) onDismiss() else error = result
-            }
-          }
-        },
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text("Edit issue", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      OutlinedTextField(
+        value = title,
+        onValueChange = { title = it; titleError = false },
+        label = { Text("Title") },
+        isError = titleError,
+        supportingText = if (titleError) ({ Text("Enter a title") }) else null,
+        singleLine = true,
+        enabled = !saving,
+        colors = fieldColors(),
+        modifier = Modifier.fillMaxWidth(),
       )
-    },
-    dismissButton = { GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving) },
-  )
+      MarkdownEditor(
+        value = description,
+        onValueChange = { description = it },
+        label = "Description",
+        minLines = 4,
+        maxLines = 10,
+        enabled = !saving,
+        previewContext = context,
+      )
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save changes",
+          loading = saving,
+          modifier = Modifier.weight(1f),
+          onClick = {
+            if (title.isBlank()) {
+              titleError = true
+            } else {
+              saving = true
+              error = null
+              onSave(title, description.text) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditMergeRequestDialog(
+  mr: GitLabMergeRequest,
+  context: MarkdownContext,
+  onDismiss: () -> Unit,
+  onSave: (String, String, (String?) -> Unit) -> Unit,
+) {
+  val c = Gl.colors
+  var title by rememberSaveable(mr.id) { mutableStateOf(mr.title) }
+  var description by rememberSaveable(mr.id, stateSaver = TextFieldValue.Saver) {
+    mutableStateOf(TextFieldValue(mr.description.orEmpty()))
+  }
+  var saving by remember { mutableStateOf(false) }
+  var error by remember { mutableStateOf<String?>(null) }
+  var titleError by remember { mutableStateOf(false) }
+  ModalBottomSheet(
+    onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
+    containerColor = c.surface,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Text("Edit merge request", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      OutlinedTextField(
+        value = title,
+        onValueChange = { title = it; titleError = false },
+        label = { Text("Title") },
+        isError = titleError,
+        supportingText = if (titleError) ({ Text("Enter a title") }) else null,
+        singleLine = true,
+        enabled = !saving,
+        colors = fieldColors(),
+        modifier = Modifier.fillMaxWidth().testTag("edit_mr_title"),
+      )
+      MarkdownEditor(
+        value = description,
+        onValueChange = { description = it },
+        label = "Description",
+        minLines = 4,
+        maxLines = 10,
+        enabled = !saving,
+        previewContext = context,
+      )
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save changes",
+          loading = saving,
+          modifier = Modifier.weight(1f),
+          onClick = {
+            if (title.isBlank()) {
+              titleError = true
+            } else {
+              saving = true
+              error = null
+              onSave(title.trim(), description.text) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -427,6 +614,7 @@ fun MergeRequestDetailScreen(
   modifier: Modifier = Modifier,
   /** The signed-in user, to tell whether they already approved. */
   currentUsername: String? = null,
+  currentUserId: Long = 0L,
   onSetApproved: (Boolean) -> Unit = {},
   onReply: (discussionId: String, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
   onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
@@ -435,13 +623,28 @@ fun MergeRequestDetailScreen(
   onRebase: () -> Unit = {},
   /** Starts a thread on a diff line; the callback gets null on success or the error message. */
   onCommentOnLine: (anchor: DiffLineAnchor, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
+  drafts: Map<String, String> = emptyMap(),
+  onDraftChange: (String, String) -> Unit = { _, _ -> },
+  onClearDraft: ((String) -> Unit)? = null,
+  onToggleReaction: ((String) -> Unit)? = null,
+  onToggleNoteReaction: ((Long, String) -> Unit)? = null,
+  projectMembers: Loadable<List<GitLabUser>> = emptyFeed(),
+  projectMilestones: Loadable<List<GitLabMilestone>> = emptyFeed(),
+  onLoadTriageData: () -> Unit = {},
+  onUpdate: (GitLabMergeRequestUpdate, (String?) -> Unit) -> Unit = { _, _ -> },
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
+  var editing by rememberSaveable { mutableStateOf(false) }
   var confirmMerge by rememberSaveable { mutableStateOf(false) }
+  var confirmClose by rememberSaveable { mutableStateOf(false) }
   var composing by rememberSaveable { mutableStateOf(false) }
   var replyingTo by rememberSaveable { mutableStateOf<String?>(null) }
   var showInfo by rememberSaveable { mutableStateOf(false) }
+  var triageTarget by rememberSaveable { mutableStateOf<TriageTarget?>(null) }
+  LaunchedEffect(showInfo, triageTarget, canWrite) {
+    if (canWrite && (showInfo || triageTarget != null)) onLoadTriageData()
+  }
   val context = remember(mr?.webUrl, onLink) {
     MarkdownContext(webBase = mr?.webUrl?.substringBefore("/-/")?.takeIf { it.isNotBlank() }, rawBase = null, onLink = onLink)
   }
@@ -457,7 +660,9 @@ fun MergeRequestDetailScreen(
       canWrite = canWrite,
       onRetry = onRetry,
       onRequestMerge = { confirmMerge = true },
+      onRequestClose = { confirmClose = true },
       onSetClosed = onSetClosed,
+      onEdit = { editing = true },
       onOpenPage = { page = it },
       onOpenPipeline = onOpenPipeline,
       onOpenUser = onOpenUser,
@@ -467,12 +672,15 @@ fun MergeRequestDetailScreen(
       onBack = onBack,
       modifier = modifier,
       currentUsername = currentUsername,
+      currentUserId = currentUserId,
       onSetApproved = onSetApproved,
       onReply = { replyingTo = it },
       onSetResolved = onSetResolved,
       onCancelAutoMerge = onCancelAutoMerge,
       onMarkReady = onMarkReady,
       onRebase = onRebase,
+      onToggleReaction = onToggleReaction,
+      onToggleNoteReaction = onToggleNoteReaction,
     )
     MrPage.FILES -> FilesChangedPage(
       state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier,
@@ -480,6 +688,9 @@ fun MergeRequestDetailScreen(
       canComment = canWrite && mr?.diffRefs != null,
       previewContext = context,
       onCommentOnLine = onCommentOnLine,
+      drafts = drafts,
+      onDraftChange = onDraftChange,
+      onClearDraft = onClearDraft,
     )
     MrPage.COMMITS -> SubPage(title = "Commits", overline = reference, onBack = { page = MrPage.OVERVIEW }, modifier = modifier) {
       loadableList(
@@ -514,6 +725,16 @@ fun MergeRequestDetailScreen(
     }
   }
 
+  if (editing && mr != null) {
+    EditMergeRequestDialog(
+      mr = mr,
+      context = context,
+      onDismiss = { editing = false },
+      onSave = { title, description, done ->
+        onUpdate(GitLabMergeRequestUpdate(title = title, description = description), done)
+      },
+    )
+  }
   if (confirmMerge && mr != null) {
     MergeDialog(
       mr = mr,
@@ -524,32 +745,128 @@ fun MergeRequestDetailScreen(
       onDismiss = { confirmMerge = false },
     )
   }
+  if (confirmClose && mr != null) {
+    AlertDialog(
+      onDismissRequest = { confirmClose = false },
+      containerColor = Gl.colors.surface,
+      title = { Text("Close merge request !${mr.iid}?", style = Gl.type.title, color = Gl.colors.textPrimary) },
+      text = {
+        Text(
+          "This closes !${mr.iid} without merging. You can reopen it later.",
+          style = Gl.type.bodySmall,
+          color = Gl.colors.textSecondary,
+        )
+      },
+      confirmButton = {
+        GlButton(
+          text = "Close merge request",
+          kind = GlButtonKind.Danger,
+          onClick = {
+            confirmClose = false
+            onSetClosed(true)
+          },
+          modifier = Modifier.testTag("confirm_close_mr"),
+        )
+      },
+      dismissButton = {
+        GlButton(text = "Cancel", onClick = { confirmClose = false }, kind = GlButtonKind.Ghost)
+      },
+    )
+  }
   if (composing) {
+    val draftKey = "mr:${state.projectId}:${state.iid}:comment"
     CommentSheet(
       posting = state.posting,
       previewContext = context,
       onDismiss = { composing = false },
       onSubmit = onComment,
+      draftKey = draftKey,
+      savedDraft = drafts[draftKey].orEmpty(),
+      onDraftChange = { onDraftChange(draftKey, it) },
+      onClearDraft = if (onClearDraft != null) ({ onClearDraft(draftKey) }) else null,
     )
   }
   replyingTo?.let { discussionId ->
+    val draftKey = "mr:${state.projectId}:${state.iid}:reply:$discussionId"
     CommentSheet(
       posting = state.posting,
       previewContext = context,
       onDismiss = { replyingTo = null },
       onSubmit = { body, done -> onReply(discussionId, body, done) },
       title = "Reply",
+      draftKey = draftKey,
+      savedDraft = drafts[draftKey].orEmpty(),
+      onDraftChange = { onDraftChange(draftKey, it) },
+      onClearDraft = if (onClearDraft != null) ({ onClearDraft(draftKey) }) else null,
     )
   }
-  if (showInfo && mr != null) {
+  if (showInfo && triageTarget == null && mr != null) {
     InfoSheet(title = "Details", onDismiss = { showInfo = false }) {
-      MetaRow("Assignees") { if (mr.assignees.isEmpty()) MetaValue("No one") else PeopleList(mr.assignees, onOpenUser) }
-      MetaRow("Reviewers") { if (mr.reviewers.isEmpty()) MetaValue("None requested") else PeopleList(mr.reviewers, onOpenUser) }
-      MetaRow("Labels") { if (mr.labels.isEmpty()) MetaValue("None") else LabelRow(mr.labels, labels) }
-      MetaRow("Milestone") { MetaValue(mr.milestone?.title?.takeIf { it.isNotBlank() } ?: "None") }
+      MetaRow(
+        label = "Assignees",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.ASSIGNEES },
+      ) {
+        if (mr.assignees.isEmpty()) MetaValue("No one") else PeopleList(mr.assignees, onOpenUser)
+      }
+      MetaRow(
+        label = "Reviewers",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.REVIEWERS },
+      ) {
+        if (mr.reviewers.isEmpty()) MetaValue("None requested") else PeopleList(mr.reviewers, onOpenUser)
+      }
+      MetaRow(
+        label = "Labels",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.LABELS },
+      ) {
+        if (mr.labels.isEmpty()) MetaValue("None") else LabelRow(mr.labels, labels)
+      }
+      MetaRow(
+        label = "Milestone",
+        actionLabel = if (canWrite) "Edit" else null,
+        onAction = { triageTarget = TriageTarget.MILESTONE },
+      ) {
+        MetaValue(mr.milestone?.title?.takeIf { it.isNotBlank() } ?: "None")
+      }
       MetaRow("Branches") { MetaValue("${mr.sourceBranch} → ${mr.targetBranch}") }
       MetaRow("Opened") { MetaValue(listOf(mr.author.name.ifBlank { mr.author.username }, mr.createdAt).filter { it.isNotBlank() }.joinToString(" · ")) }
       if (mr.squash == true) MetaRow("Merge options") { MetaValue("Squash commits when merging") }
+    }
+  }
+  if (triageTarget != null && mr != null) {
+    when (triageTarget) {
+      TriageTarget.ASSIGNEES -> MemberPickerDialog(
+        title = "Assignees",
+        members = projectMembers,
+        selected = mr.assignees,
+        onRetry = onLoadTriageData,
+        onDismiss = { triageTarget = null },
+        onSave = { ids, done -> onUpdate(GitLabMergeRequestUpdate(assigneeIds = ids), done) },
+      )
+      TriageTarget.REVIEWERS -> MemberPickerDialog(
+        title = "Reviewers",
+        members = projectMembers,
+        selected = mr.reviewers,
+        onRetry = onLoadTriageData,
+        onDismiss = { triageTarget = null },
+        onSave = { ids, done -> onUpdate(GitLabMergeRequestUpdate(reviewerIds = ids), done) },
+      )
+      TriageTarget.LABELS -> LabelPickerDialog(
+        availableLabels = labels,
+        currentLabels = mr.labels,
+        onDismiss = { triageTarget = null },
+        onSave = { add, remove, done -> onUpdate(GitLabMergeRequestUpdate(addLabels = add, removeLabels = remove), done) },
+      )
+      TriageTarget.MILESTONE -> MilestonePickerDialog(
+        milestones = projectMilestones,
+        current = mr.milestone,
+        onRetry = onLoadTriageData,
+        onDismiss = { triageTarget = null },
+        onSave = { id, done -> onUpdate(GitLabMergeRequestUpdate(milestoneId = id), done) },
+      )
+      null -> Unit
     }
   }
 }
@@ -564,7 +881,9 @@ private fun MergeRequestOverview(
   canWrite: Boolean,
   onRetry: () -> Unit,
   onRequestMerge: () -> Unit,
+  onRequestClose: () -> Unit,
   onSetClosed: (Boolean) -> Unit,
+  onEdit: () -> Unit,
   onOpenPage: (MrPage) -> Unit,
   onOpenPipeline: (GitLabPipeline) -> Unit,
   onOpenUser: (GitLabUser) -> Unit,
@@ -574,12 +893,15 @@ private fun MergeRequestOverview(
   onBack: () -> Unit,
   modifier: Modifier,
   currentUsername: String? = null,
+  currentUserId: Long = 0L,
   onSetApproved: (Boolean) -> Unit = {},
   onReply: (discussionId: String) -> Unit = {},
   onSetResolved: (discussionId: String, resolved: Boolean) -> Unit = { _, _ -> },
   onCancelAutoMerge: () -> Unit = {},
   onMarkReady: () -> Unit = {},
   onRebase: () -> Unit = {},
+  onToggleReaction: ((String) -> Unit)? = null,
+  onToggleNoteReaction: ((Long, String) -> Unit)? = null,
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
@@ -598,8 +920,9 @@ private fun MergeRequestOverview(
   Column(modifier = modifier.fillMaxSize().background(c.bg)) {
     val menu = buildList {
       if (canWrite && mr != null) {
+        add(DetailMenuItem("Edit", onEdit, enabled = !state.busy))
         when (mr.state) {
-          "opened" -> add(DetailMenuItem("Close merge request", { onSetClosed(true) }, enabled = !state.busy))
+          "opened" -> add(DetailMenuItem("Close merge request", onRequestClose, enabled = !state.busy))
           "closed" -> add(DetailMenuItem("Reopen merge request", { onSetClosed(false) }, enabled = !state.busy))
         }
       }
@@ -655,7 +978,20 @@ private fun MergeRequestOverview(
                 onOpenUser = onOpenUser,
                 collapsible = true,
               ) {
-                Reactions(mr.upvotes, mr.downvotes)
+                ReactionRow(
+                  reactions = summarizeReactions(
+                    awards = state.awardEmojis,
+                    currentUsername = currentUsername,
+                    currentUserId = currentUserId,
+                    fallbackUpvotes = mr.upvotes,
+                    fallbackDownvotes = mr.downvotes,
+                    awardsLoaded = state.awardEmojisLoaded,
+                  ),
+                  busyKeys = state.togglingReactions,
+                  keyPrefix = "mr",
+                  canReact = canWrite,
+                  onToggle = onToggleReaction,
+                )
               }
             }
 
@@ -674,6 +1010,7 @@ private fun MergeRequestOverview(
                 state = state,
                 canWrite = canWrite,
                 onRequestMerge = onRequestMerge,
+                onRequestClose = onRequestClose,
                 onSetClosed = onSetClosed,
                 onOpenPipeline = onOpenPipeline,
                 onOpenUser = onOpenUser,
@@ -694,7 +1031,21 @@ private fun MergeRequestOverview(
             }
             val threads = state.discussions.data.filter { d -> showAllActivity || d.notes.any { !it.system } }
             if (threads.isEmpty() || state.discussions.error != null) {
-              timeline(notes = state.notes.copy(data = if (showAllActivity) state.notes.data else state.notes.data.filterNot { it.system }), labels = labels, opener = mr.author, context = context, onOpenUser = onOpenUser, onRetry = onRetry, guest = !canWrite)
+              timeline(
+                notes = state.notes.copy(data = if (showAllActivity) state.notes.data else state.notes.data.filterNot { it.system }),
+                labels = labels,
+                opener = mr.author,
+                context = context,
+                onOpenUser = onOpenUser,
+                onRetry = onRetry,
+                guest = !canWrite,
+                noteAwardEmojis = state.noteAwardEmojis,
+                togglingReactions = state.togglingReactions,
+                currentUsername = currentUsername,
+                currentUserId = currentUserId,
+                canReact = canWrite,
+                onToggleNoteReaction = onToggleNoteReaction,
+              )
             } else {
               item(key = "rail-top") { RailGap() }
               items(threads, key = { "discussion-${it.id}" }) { discussion ->
@@ -705,7 +1056,19 @@ private fun MergeRequestOverview(
                 }
                 Column(Modifier.fillMaxWidth().then(if (visibleNotes.size > 1) Modifier.padding(start = 12.dp).border(width = 1.dp, color = c.border) else Modifier)) {
                   visibleNotes.forEachIndexed { index, note ->
-                    if (note.system) SystemEvent(note, labels) else CommentPost(note, isOpener = note.author.id != 0L && note.author.id == mr.author.id, context = context, onOpenUser = onOpenUser, isReply = index > 0)
+                    if (note.system) SystemEvent(note, labels) else CommentPost(
+                      note = note,
+                      isOpener = note.author.id != 0L && note.author.id == mr.author.id,
+                      context = context,
+                      onOpenUser = onOpenUser,
+                      isReply = index > 0,
+                      noteAwards = state.noteAwardEmojis[note.id].orEmpty(),
+                      togglingReactions = state.togglingReactions,
+                      currentUsername = currentUsername,
+                      currentUserId = currentUserId,
+                      canReact = canWrite,
+                      onToggleReaction = if (onToggleNoteReaction != null) ({ emoji -> onToggleNoteReaction(note.id, emoji) }) else null,
+                    )
                   }
                   if (discussion.notes.any { !it.system }) {
                     ThreadActions(
@@ -808,6 +1171,7 @@ private fun StatusRows(
   state: MergeRequestDetailState,
   canWrite: Boolean,
   onRequestMerge: () -> Unit,
+  onRequestClose: () -> Unit,
   onSetClosed: (Boolean) -> Unit,
   onOpenPipeline: (GitLabPipeline) -> Unit,
   onOpenUser: (GitLabUser) -> Unit,
@@ -921,7 +1285,7 @@ private fun StatusRows(
               enabled = !checking && !approvalsMissing && blockedReason == null && !state.busy,
               loading = state.busy,
               onMerge = onRequestMerge,
-              onClose = { onSetClosed(true) },
+              onClose = onRequestClose,
             )
             if (blockedReason != null) {
               Spacer(Modifier.height(6.dp))
@@ -1082,6 +1446,9 @@ private fun FilesChangedPage(
   canComment: Boolean = false,
   previewContext: MarkdownContext? = null,
   onCommentOnLine: (DiffLineAnchor, String, (String?) -> Unit) -> Unit = { _, _, _ -> },
+  drafts: Map<String, String> = emptyMap(),
+  onDraftChange: (String, String) -> Unit = { _, _ -> },
+  onClearDraft: ((String) -> Unit)? = null,
 ) {
   val c = Gl.colors
   val diffs = state.diffs
@@ -1177,6 +1544,7 @@ private fun FilesChangedPage(
     val diff = diffs.data.getOrNull(file)
     val anchor = diff?.let { line.anchorIn(it) }
     if (diff != null && anchor != null && previewContext != null) {
+      val draftKey = "mr:${state.projectId}:${state.iid}:diff:${anchor.oldPath}:${anchor.newPath}:${anchor.oldLine}:${anchor.newLine}"
       CommentSheet(
         posting = state.posting,
         previewContext = previewContext,
@@ -1186,6 +1554,10 @@ private fun FilesChangedPage(
         quote = { DiffLineQuote(diff, line) },
         // GitLab applies suggestions to the new version, so removed lines can't have one.
         suggestion = line.newNo?.let { rawNewLine(diff.diff, it) },
+        draftKey = draftKey,
+        savedDraft = drafts[draftKey].orEmpty(),
+        onDraftChange = { onDraftChange(draftKey, it) },
+        onClearDraft = if (onClearDraft != null) ({ onClearDraft(draftKey) }) else null,
       )
     }
   }
@@ -1476,15 +1848,6 @@ private fun RoleBadge(text: String) {
 }
 
 @Composable
-private fun Reactions(up: Int, down: Int) {
-  if (up <= 0 && down <= 0) return
-  Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    if (up > 0) DetailReactionChip("👍", up, plural(up, "thumbs up", "thumbs up"))
-    if (down > 0) DetailReactionChip("👎", down, plural(down, "thumbs down", "thumbs down"))
-  }
-}
-
-@Composable
 private fun TaskProgress(done: Int, total: Int) {
   val c = Gl.colors
   Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1500,7 +1863,7 @@ private fun TaskProgress(done: Int, total: Int) {
 
 @Composable
 private fun BusyDot() {
-  androidx.compose.material3.CircularProgressIndicator(
+  CircularProgressIndicator(
     modifier = Modifier.size(16.dp).semantics { contentDescription = "Updating" },
     strokeWidth = 2.dp,
     color = Gl.colors.textSecondary,
@@ -1548,7 +1911,12 @@ private fun InfoSheet(title: String, onDismiss: () -> Unit, content: @Composable
 }
 
 @Composable
-private fun MetaRow(label: String, content: @Composable () -> Unit) {
+private fun MetaRow(
+  label: String,
+  actionLabel: String? = null,
+  onAction: (() -> Unit)? = null,
+  content: @Composable () -> Unit,
+) {
   Column(
     modifier = Modifier
       .fillMaxWidth()
@@ -1556,7 +1924,20 @@ private fun MetaRow(label: String, content: @Composable () -> Unit) {
       .padding(horizontal = GlSpace.margin, vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    Text(label, style = Gl.type.meta, color = Gl.colors.textSecondary)
+    if (actionLabel != null && onAction != null) {
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = Gl.type.meta, color = Gl.colors.textSecondary, modifier = Modifier.weight(1f))
+        TextButton(
+          onClick = onAction,
+          contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+          modifier = Modifier.heightIn(min = 32.dp).testTag("edit_${label.lowercase(Locale.ROOT)}"),
+        ) {
+          Text(actionLabel, style = Gl.type.label, color = Gl.colors.accent)
+        }
+      }
+    } else {
+      Text(label, style = Gl.type.meta, color = Gl.colors.textSecondary)
+    }
     content()
   }
   GlDivider(inset = GlSpace.margin)
@@ -1642,6 +2023,12 @@ private fun LazyListScope.timeline(
   onOpenUser: (GitLabUser) -> Unit,
   onRetry: () -> Unit,
   guest: Boolean = false,
+  noteAwardEmojis: Map<Long, List<GitLabAwardEmoji>> = emptyMap(),
+  togglingReactions: Set<String> = emptySet(),
+  currentUsername: String? = null,
+  currentUserId: Long = 0L,
+  canReact: Boolean = false,
+  onToggleNoteReaction: ((Long, String) -> Unit)? = null,
 ) {
   val error = notes.error
   when {
@@ -1679,7 +2066,18 @@ private fun LazyListScope.timeline(
       item(key = "rail-top") { RailGap() }
       items(notes.data, key = { "note-${it.id}" }) { note ->
         if (note.system) SystemEvent(note, labels) else {
-          CommentPost(note, isOpener = note.author.id != 0L && note.author.id == opener.id, context = context, onOpenUser = onOpenUser)
+          CommentPost(
+            note = note,
+            isOpener = note.author.id != 0L && note.author.id == opener.id,
+            context = context,
+            onOpenUser = onOpenUser,
+            noteAwards = noteAwardEmojis[note.id].orEmpty(),
+            togglingReactions = togglingReactions,
+            currentUsername = currentUsername,
+            currentUserId = currentUserId,
+            canReact = canReact,
+            onToggleReaction = if (onToggleNoteReaction != null) ({ emoji -> onToggleNoteReaction(note.id, emoji) }) else null,
+          )
           RailGap()
         }
       }
@@ -1696,8 +2094,21 @@ private fun RailGap() {
 }
 
 @Composable
-private fun CommentPost(note: GitLabNote, isOpener: Boolean, context: MarkdownContext, onOpenUser: (GitLabUser) -> Unit, isReply: Boolean = false) {
+private fun CommentPost(
+  note: GitLabNote,
+  isOpener: Boolean,
+  context: MarkdownContext,
+  onOpenUser: (GitLabUser) -> Unit,
+  isReply: Boolean = false,
+  noteAwards: List<GitLabAwardEmoji> = emptyList(),
+  togglingReactions: Set<String> = emptySet(),
+  currentUsername: String? = null,
+  currentUserId: Long = 0L,
+  canReact: Boolean = false,
+  onToggleReaction: ((String) -> Unit)? = null,
+) {
   val c = Gl.colors
+  val hasReactionsRow = noteAwards.isNotEmpty() || (canReact && onToggleReaction != null)
   Column(Modifier.fillMaxWidth().background(c.bg)) {
     GlDivider()
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1709,8 +2120,23 @@ private fun CommentPost(note: GitLabNote, isOpener: Boolean, context: MarkdownCo
         if (note.resolved == true) GlBadge("Resolved", tone = Tone.Success)
       }
     }
-    Box(Modifier.padding(start = GlSpace.margin, end = GlSpace.margin, bottom = GlSpace.margin)) {
+    Box(Modifier.padding(start = GlSpace.margin, end = GlSpace.margin, bottom = if (hasReactionsRow) 8.dp else GlSpace.margin)) {
       MarkdownText(note.body, context = context)
+    }
+    if (hasReactionsRow) {
+      ReactionRow(
+        reactions = summarizeReactions(
+          awards = noteAwards,
+          currentUsername = currentUsername,
+          currentUserId = currentUserId,
+          awardsLoaded = true,
+        ),
+        busyKeys = togglingReactions,
+        keyPrefix = "note:${note.id}",
+        canReact = canReact,
+        onToggle = onToggleReaction,
+        modifier = Modifier.padding(start = GlSpace.margin, end = GlSpace.margin, bottom = 12.dp),
+      )
     }
     GlDivider()
   }
@@ -1800,9 +2226,15 @@ private fun CommentSheet(
   quote: (@Composable () -> Unit)? = null,
   /** The line's current text: offers "Suggest a change" that starts a suggestion with it. */
   suggestion: String? = null,
+  draftKey: String = "comment",
+  savedDraft: String = "",
+  onDraftChange: (String) -> Unit = {},
+  onClearDraft: (() -> Unit)? = null,
 ) {
   val c = Gl.colors
-  var draft by remember { mutableStateOf(TextFieldValue("")) }
+  var draft by rememberSaveable(draftKey, stateSaver = TextFieldValue.Saver) {
+    mutableStateOf(TextFieldValue(savedDraft))
+  }
   var error by remember { mutableStateOf<String?>(null) }
   var emptyError by remember { mutableStateOf(false) }
   ModalBottomSheet(
@@ -1823,7 +2255,11 @@ private fun CommentSheet(
       quote?.invoke()
       MarkdownEditor(
         value = draft,
-        onValueChange = { draft = it; emptyError = false },
+        onValueChange = {
+          draft = it
+          emptyError = false
+          onDraftChange(it.text)
+        },
         label = "Add a comment",
         minLines = 4,
         maxLines = 12,
@@ -1836,34 +2272,68 @@ private fun CommentSheet(
       if (suggestion != null && !draft.text.contains("```suggestion")) {
         GlButton(
           text = "Suggest a change",
-          onClick = { draft = withSuggestion(draft, suggestion) },
+          onClick = {
+            val updated = withSuggestion(draft, suggestion)
+            draft = updated
+            emptyError = false
+            onDraftChange(updated.text)
+          },
           kind = GlButtonKind.Ghost,
           icon = Icons.Outlined.EditNote,
           enabled = !posting,
           modifier = Modifier.testTag("suggest_change"),
         )
       }
-      GlButton(
-        text = title,
-        loading = posting,
-        modifier = Modifier.fillMaxWidth(),
-        onClick = {
-          val body = draft.text.trim()
-          if (body.isEmpty()) {
-            emptyError = true
-          } else {
-            error = null
-            onSubmit(body) { result ->
-              if (result == null) {
-                draft = TextFieldValue("")
-                onDismiss()
-              } else {
-                error = result
-              }
+      val submitClick: () -> Unit = {
+        val body = draft.text.trim()
+        if (body.isEmpty()) {
+          emptyError = true
+        } else {
+          error = null
+          onSubmit(body) { result ->
+            if (result == null) {
+              draft = TextFieldValue("")
+              onClearDraft?.invoke()
+              onDismiss()
+            } else {
+              error = result
             }
           }
-        },
-      )
+        }
+      }
+      if (onClearDraft != null && draft.text.isNotEmpty()) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          GlButton(
+            text = "Discard",
+            onClick = {
+              draft = TextFieldValue("")
+              emptyError = false
+              error = null
+              onClearDraft()
+            },
+            kind = GlButtonKind.Ghost,
+            enabled = !posting,
+            modifier = Modifier.testTag("discard_draft"),
+          )
+          GlButton(
+            text = title,
+            loading = posting,
+            modifier = Modifier.weight(1f),
+            onClick = submitClick,
+          )
+        }
+      } else {
+        GlButton(
+          text = title,
+          loading = posting,
+          modifier = Modifier.fillMaxWidth(),
+          onClick = submitClick,
+        )
+      }
     }
   }
 }
@@ -2010,3 +2480,370 @@ private fun DiffLineQuote(diff: GitLabFileDiff, line: DiffLine) {
     )
   }
 }
+
+private val longSetSaver = listSaver<Set<Long>, Long>(
+  save = { it.toList() },
+  restore = { it.toSet() },
+)
+
+private val stringSetSaver = listSaver<Set<String>, String>(
+  save = { it.toList() },
+  restore = { it.toSet() },
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MemberPickerDialog(
+  title: String,
+  members: Loadable<List<GitLabUser>>,
+  selected: List<GitLabUser>,
+  onRetry: () -> Unit,
+  onDismiss: () -> Unit,
+  onSave: (List<Long>, (String?) -> Unit) -> Unit,
+) {
+  val c = Gl.colors
+  var query by rememberSaveable(title) { mutableStateOf("") }
+  var selectedIds by rememberSaveable(title, selected, stateSaver = longSetSaver) {
+    mutableStateOf(selected.map { it.id }.toSet())
+  }
+  var saving by remember { mutableStateOf(false) }
+  var error by remember { mutableStateOf<String?>(null) }
+  val allMembers = remember(members.data, selected) {
+    (members.data + selected).filter { it.id > 0L }.distinctBy { it.id }
+  }
+  val filtered = remember(allMembers, query) {
+    val q = query.trim()
+    if (q.isEmpty()) allMembers
+    else allMembers.filter {
+      it.name.contains(q, ignoreCase = true) || it.username.contains(q, ignoreCase = true)
+    }
+  }
+  ModalBottomSheet(
+    onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
+    containerColor = c.surface,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(title, style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      if (allMembers.isNotEmpty()) {
+        OutlinedTextField(
+          value = query,
+          onValueChange = { query = it },
+          label = { Text("Filter members") },
+          singleLine = true,
+          enabled = !saving,
+          colors = fieldColors(),
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
+      when {
+        members.initialLoading && allMembers.isEmpty() -> Box(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
+        }
+        members.error != null && allMembers.isEmpty() -> InlineError(members.error, onRetry = onRetry)
+        allMembers.isEmpty() -> Text("No project members found.", style = Gl.type.bodySmall, color = c.textSecondary)
+        filtered.isEmpty() -> Text("No matching members.", style = Gl.type.bodySmall, color = c.textSecondary)
+        else -> Column(modifier = Modifier.fillMaxWidth()) {
+          filtered.forEach { user ->
+            val checked = user.id in selectedIds
+            val display = user.name.ifBlank { user.username }
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(
+                  value = checked,
+                  enabled = !saving,
+                  role = Role.Checkbox,
+                  onValueChange = { isChecked ->
+                    selectedIds = if (isChecked) selectedIds + user.id else selectedIds - user.id
+                  },
+                )
+                .heightIn(min = GlSpace.touch)
+                .padding(vertical = 4.dp)
+                .testTag("pick_member_${user.id}"),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Checkbox(checked = checked, onCheckedChange = null, enabled = !saving)
+              Spacer(Modifier.width(8.dp))
+              Avatar(user.avatarUrl, display, 28.dp)
+              Spacer(Modifier.width(10.dp))
+              Column(Modifier.weight(1f)) {
+                Text(display, style = Gl.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (user.username.isNotBlank()) {
+                  Text("@${user.username}", style = Gl.type.meta, color = c.textSecondary, maxLines = 1)
+                }
+              }
+            }
+          }
+        }
+      }
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save",
+          loading = saving,
+          enabled = !saving && (allMembers.isNotEmpty() || selectedIds.isNotEmpty()),
+          modifier = Modifier.weight(1f).testTag("triage_save"),
+          onClick = {
+            val initial = selected.map { it.id }.toSet()
+            if (selectedIds == initial) {
+              onDismiss()
+            } else {
+              saving = true
+              error = null
+              onSave(selectedIds.toList()) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LabelPickerDialog(
+  availableLabels: Map<String, GitLabLabel>,
+  currentLabels: List<String>,
+  onDismiss: () -> Unit,
+  onSave: (add: String?, remove: String?, (String?) -> Unit) -> Unit,
+) {
+  val c = Gl.colors
+  var query by rememberSaveable { mutableStateOf("") }
+  var selected by rememberSaveable(currentLabels, stateSaver = stringSetSaver) {
+    mutableStateOf(currentLabels.toSet())
+  }
+  var saving by remember { mutableStateOf(false) }
+  var error by remember { mutableStateOf<String?>(null) }
+  val allNames = remember(availableLabels, currentLabels) {
+    (availableLabels.keys + currentLabels).distinct().sortedBy { it.lowercase(Locale.ROOT) }
+  }
+  val filtered = remember(allNames, query) {
+    val q = query.trim()
+    if (q.isEmpty()) allNames else allNames.filter { it.contains(q, ignoreCase = true) }
+  }
+  ModalBottomSheet(
+    onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
+    containerColor = c.surface,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("Labels", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      if (allNames.isNotEmpty()) {
+        OutlinedTextField(
+          value = query,
+          onValueChange = { query = it },
+          label = { Text("Filter labels") },
+          singleLine = true,
+          enabled = !saving,
+          colors = fieldColors(),
+          modifier = Modifier.fillMaxWidth(),
+        )
+      }
+      when {
+        allNames.isEmpty() -> Text("No project labels found.", style = Gl.type.bodySmall, color = c.textSecondary)
+        filtered.isEmpty() -> Text("No matching labels.", style = Gl.type.bodySmall, color = c.textSecondary)
+        else -> Column(modifier = Modifier.fillMaxWidth()) {
+          filtered.forEach { name ->
+            val checked = name in selected
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(
+                  value = checked,
+                  enabled = !saving,
+                  role = Role.Checkbox,
+                  onValueChange = { isChecked ->
+                    selected = if (isChecked) selected + name else selected - name
+                  },
+                )
+                .heightIn(min = GlSpace.touch)
+                .padding(vertical = 4.dp)
+                .testTag("pick_label_$name"),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Checkbox(checked = checked, onCheckedChange = null, enabled = !saving)
+              Spacer(Modifier.width(8.dp))
+              ColoredLabel(name, availableLabels[name])
+            }
+          }
+        }
+      }
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save",
+          loading = saving,
+          enabled = !saving && allNames.isNotEmpty(),
+          modifier = Modifier.weight(1f).testTag("triage_save"),
+          onClick = {
+            val initial = currentLabels.toSet()
+            val add = selected.filter { it !in initial }.takeIf { it.isNotEmpty() }?.joinToString(",")
+            val remove = initial.filter { it !in selected }.takeIf { it.isNotEmpty() }?.joinToString(",")
+            if (add == null && remove == null) {
+              onDismiss()
+            } else {
+              saving = true
+              error = null
+              onSave(add, remove) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MilestonePickerDialog(
+  milestones: Loadable<List<GitLabMilestone>>,
+  current: GitLabMilestone?,
+  onRetry: () -> Unit,
+  onDismiss: () -> Unit,
+  onSave: (Long?, (String?) -> Unit) -> Unit,
+) {
+  val c = Gl.colors
+  var selectedId by rememberSaveable(current?.id) { mutableStateOf(current?.id ?: 0L) }
+  var saving by remember { mutableStateOf(false) }
+  var error by remember { mutableStateOf<String?>(null) }
+  val allMilestones = remember(milestones.data, current) {
+    (listOfNotNull(current?.takeIf { it.id > 0L }) + milestones.data).distinctBy { it.id }
+  }
+  ModalBottomSheet(
+    onDismissRequest = { if (!saving) onDismiss() },
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !saving }),
+    containerColor = c.surface,
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .imePadding()
+        .navigationBarsPadding()
+        .verticalScroll(rememberScrollState())
+        .padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text("Milestone", style = Gl.type.title, color = c.textPrimary, modifier = Modifier.semantics { heading() })
+      when {
+        milestones.initialLoading && allMilestones.isEmpty() -> Box(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = c.accent)
+        }
+        milestones.error != null && allMilestones.isEmpty() -> InlineError(milestones.error, onRetry = onRetry)
+        else -> Column(modifier = Modifier.fillMaxWidth()) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .selectable(
+                selected = selectedId == 0L,
+                enabled = !saving,
+                role = Role.RadioButton,
+                onClick = { selectedId = 0L },
+              )
+              .heightIn(min = GlSpace.touch)
+              .testTag("pick_milestone_none"),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            RadioButton(selected = selectedId == 0L, onClick = null, enabled = !saving)
+            Spacer(Modifier.width(8.dp))
+            Text("No milestone", style = Gl.type.body, color = c.textSecondary)
+          }
+          allMilestones.forEach { milestone ->
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .selectable(
+                  selected = selectedId == milestone.id,
+                  enabled = !saving,
+                  role = Role.RadioButton,
+                  onClick = { selectedId = milestone.id },
+                )
+                .heightIn(min = GlSpace.touch)
+                .padding(vertical = 4.dp)
+                .testTag("pick_milestone_${milestone.id}"),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              RadioButton(selected = selectedId == milestone.id, onClick = null, enabled = !saving)
+              Spacer(Modifier.width(8.dp))
+              Column(Modifier.weight(1f)) {
+                Text(milestone.title, style = Gl.type.body, color = c.textPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val meta = listOfNotNull(
+                  milestone.dueDate?.takeIf { it.isNotBlank() }?.let { "Due $it" },
+                  milestone.state.takeIf { it.isNotBlank() && it != "active" },
+                ).joinToString(" · ")
+                if (meta.isNotEmpty()) {
+                  Text(meta, style = Gl.type.meta, color = c.textSecondary, maxLines = 1)
+                }
+              }
+            }
+          }
+        }
+      }
+      error?.let { InlineError(it) }
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        GlButton(text = "Cancel", onClick = onDismiss, kind = GlButtonKind.Ghost, enabled = !saving)
+        GlButton(
+          text = "Save",
+          loading = saving,
+          enabled = !saving,
+          modifier = Modifier.weight(1f).testTag("triage_save"),
+          onClick = {
+            if (selectedId == (current?.id ?: 0L)) {
+              onDismiss()
+            } else {
+              saving = true
+              error = null
+              onSave(selectedId) { result ->
+                saving = false
+                if (result == null) onDismiss() else error = result
+              }
+            }
+          },
+        )
+      }
+    }
+  }
+}
+
