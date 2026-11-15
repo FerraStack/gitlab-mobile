@@ -70,7 +70,6 @@ class SnippetsAndCiTest {
         """[{"id":5,"title":"Deploy helper","file_name":"deploy.sh","visibility":"private","files":[{"path":"deploy.sh","raw_url":"https://gitlab.com/-/snippets/5/raw"}]}]"""
       )
     )
-    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("[]"))
     val personal = repository.getSnippets(instance).getOrThrow()
     assertEquals(1, personal.size)
     assertEquals("Deploy helper", personal.first().title)
@@ -81,7 +80,6 @@ class SnippetsAndCiTest {
         """[{"id":9,"project_id":12,"title":"Proj script","file_name":"run.py","visibility":"public"}]"""
       )
     )
-    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("[]"))
     val projectSnippets = repository.getProjectSnippets(instance, 12L).getOrThrow()
     assertEquals(1, projectSnippets.size)
     assertEquals(12L, projectSnippets.first().projectId)
@@ -101,7 +99,6 @@ class SnippetsAndCiTest {
         ]"""
       )
     )
-    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("[]"))
 
     val vars = repository.getProjectVariables(instance, 12L).getOrThrow()
     assertEquals(listOf("A_REGION", "Z_TOKEN"), vars.map { it.key })
@@ -137,7 +134,6 @@ class SnippetsAndCiTest {
         ]"""
       )
     )
-    server.enqueue(MockResponse().addHeader("Content-Type", "application/json").setBody("[]"))
 
     val envs = repository.getProjectEnvironments(instance, 12L).getOrThrow()
     assertEquals(1, envs.size)

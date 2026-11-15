@@ -138,6 +138,8 @@ object GitLabApiClient {
 
       fun tryCachedResponse(): OkHttpResponse? {
         val cachedReq = request.newBuilder()
+          .removeHeader("Cache-Control")
+          .removeHeader("Pragma")
           .cacheControl(CacheControl.Builder().onlyIfCached().maxStale(7, TimeUnit.DAYS).build())
           .build()
         val cached = chain.proceed(cachedReq)

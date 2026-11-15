@@ -257,7 +257,7 @@ class OfflineAndSecurityTest {
           path.startsWith("/api/v4/user_status") -> MockResponse().setBody("{}")
           path.startsWith("/api/v4/user") -> MockResponse().setBody("""{"id":1,"username":"dev","name":"Dev"}""")
           path.startsWith("/api/v4/version") -> MockResponse().setBody("""{"version":"17.8.0"}""")
-          path == "/api/v4/projects/12" -> {
+          request.requestUrl?.encodedPath == "/api/v4/projects/12" -> {
             projectCalls.incrementAndGet()
             MockResponse().setBody("""{"id":12,"name":"rocket","name_with_namespace":"Org / rocket","path_with_namespace":"org/rocket","default_branch":"main","web_url":"https://gitlab.com/org/rocket"}""")
           }
