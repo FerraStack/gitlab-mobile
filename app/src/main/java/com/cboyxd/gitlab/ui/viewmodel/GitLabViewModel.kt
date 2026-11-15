@@ -387,26 +387,26 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
             onFailure = { error -> _uiState.update { s -> s.copy(projects = s.projects.failure(error.userMessage())) } }
           )
           // Anonymous sessions have no "my pipelines"; skip the fan-out over popular projects.
-          val pipelines = if (instance.token.isBlank()) Result.success(emptyList())
-          else projects.getOrNull()?.let { list -> api { repository.getRecentPipelines(it, list) } }
+          val pipelines = if (instance.token.isBlank()) Result.success(com.cboyxd.gitlab.data.repository.PagedSlice(emptyList()))
+          else projects.getOrNull()?.let { list -> api { repository.getRecentPipelinesPage(it, list) } }
             ?: Result.failure(projects.exceptionOrNull() ?: IllegalStateException())
           pipelines.fold(
-            onSuccess = { list ->
-              _uiState.update { s -> s.copy(pipelines = s.pipelines.success(list)) }
+            onSuccess = { slice ->
+              _uiState.update { s -> s.copy(pipelines = s.pipelines.success(slice.items), pipelinesTruncated = slice.truncated) }
               syncWidgetPipelines()
             },
             onFailure = { error -> _uiState.update { s -> s.copy(pipelines = s.pipelines.failure(error.userMessage())) } }
           )
         }
         launch {
-          api { repository.getMyIssues(it) }.fold(
-            onSuccess = { list -> _uiState.update { s -> s.copy(issues = s.issues.success(list)) } },
+          api { repository.getMyIssuesPage(it) }.fold(
+            onSuccess = { slice -> _uiState.update { s -> s.copy(issues = s.issues.success(slice.items), issuesTruncated = slice.truncated) } },
             onFailure = { error -> _uiState.update { s -> s.copy(issues = s.issues.failure(error.userMessage())) } }
           )
         }
         launch {
-          api { repository.getMyMergeRequests(it) }.fold(
-            onSuccess = { list -> _uiState.update { s -> s.copy(mergeRequests = s.mergeRequests.success(list)) } },
+          api { repository.getMyMergeRequestsPage(it) }.fold(
+            onSuccess = { slice -> _uiState.update { s -> s.copy(mergeRequests = s.mergeRequests.success(slice.items), mergeRequestsTruncated = slice.truncated) } },
             onFailure = { error -> _uiState.update { s -> s.copy(mergeRequests = s.mergeRequests.failure(error.userMessage())) } }
           )
         }
@@ -494,8 +494,11 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     projects = emptyFeed(),
     groups = emptyFeed(),
     issues = emptyFeed(),
+    issuesTruncated = false,
     mergeRequests = emptyFeed(),
+    mergeRequestsTruncated = false,
     pipelines = emptyFeed(),
+    pipelinesTruncated = false,
     notifications = emptyFeed(),
     inboxTypeFilter = InboxTypeFilter.ALL,
     inboxProjectId = null,

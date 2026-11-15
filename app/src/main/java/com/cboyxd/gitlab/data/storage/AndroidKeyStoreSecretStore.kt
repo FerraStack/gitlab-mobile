@@ -1,21 +1,83 @@
 package com.cboyxd.gitlab.data.storage
 
 import android.content.Context
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import java.security.SecureRandom
+import java.security.Security
+import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import java.security.SecureRandom
-import java.util.concurrent.ConcurrentHashMap
 
-/** Stores short strings encrypted with an AES key that never leaves Android Keystore. */
-class AndroidKeyStoreSecretStore(context: Context, name: String) {
+interface SecretKeyProvider {
+  fun getOrCreateKey(alias: String): SecretKey
+  fun deleteKey(alias: String)
+}
+
+object AndroidKeyStoreKeyProvider : SecretKeyProvider {
+  override fun getOrCreateKey(alias: String): SecretKey {
+    val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
+    (keyStore.getKey(alias, null) as? SecretKey)?.let { return it }
+
+    return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEY_STORE).run {
+      init(
+        KeyGenParameterSpec.Builder(
+          alias,
+          KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+          .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+          .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+          .setKeySize(256)
+          .setRandomizedEncryptionRequired(true)
+          .build()
+      )
+      generateKey()
+    }
+  }
+
+  override fun deleteKey(alias: String) {
+    runCatching { KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }.deleteEntry(alias) }
+  }
+
+  private const val ANDROID_KEY_STORE = "AndroidKeyStore"
+}
+
+class InMemorySecretKeyProvider : SecretKeyProvider {
+  private val keys = ConcurrentHashMap<String, SecretKey>()
+  private val random = SecureRandom()
+
+  override fun getOrCreateKey(alias: String): SecretKey =
+    keys.getOrPut(alias) {
+      ByteArray(32).also(random::nextBytes).let { SecretKeySpec(it, "AES") }
+    }
+
+  override fun deleteKey(alias: String) {
+    keys.remove(alias)
+  }
+}
+
+internal object DefaultSecretKeyProvider : SecretKeyProvider {
+  private val fallback = InMemorySecretKeyProvider()
+
+  private fun delegate(): SecretKeyProvider =
+    if (Security.getProvider("AndroidKeyStore") != null) AndroidKeyStoreKeyProvider else fallback
+
+  override fun getOrCreateKey(alias: String): SecretKey = delegate().getOrCreateKey(alias)
+
+  override fun deleteKey(alias: String) = delegate().deleteKey(alias)
+}
+
+/** Stores short strings encrypted with an AES key provided by [keyProvider] (Android Keystore on device). */
+class AndroidKeyStoreSecretStore(
+  context: Context,
+  name: String,
+  private val keyProvider: SecretKeyProvider = DefaultSecretKeyProvider,
+) {
   private val preferences = context.getSharedPreferences(name, Context.MODE_PRIVATE)
   private val keyAlias = "${context.packageName}.$name.aes"
 
@@ -70,11 +132,7 @@ class AndroidKeyStoreSecretStore(context: Context, name: String) {
   @Synchronized
   fun reset() {
     preferences.edit().clear().commit()
-    if (Build.FINGERPRINT.lowercase().contains("robolectric")) {
-      TEST_KEYS.remove(keyAlias)
-      return
-    }
-    runCatching { KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }.deleteEntry(keyAlias) }
+    keyProvider.deleteKey(keyAlias)
   }
 
   private fun looksEncrypted(value: String): Boolean {
@@ -104,35 +162,9 @@ class AndroidKeyStoreSecretStore(context: Context, name: String) {
     return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
   }
 
-  private fun secretKey(): SecretKey {
-    // Robolectric does not provide AndroidKeyStore; keep unit tests isolated from device crypto.
-    if (Build.FINGERPRINT.lowercase().contains("robolectric")) {
-      return TEST_KEYS.getOrPut(keyAlias) {
-        ByteArray(32).also(SecureRandom()::nextBytes).let { SecretKeySpec(it, "AES") }
-      }
-    }
-    val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
-    (keyStore.getKey(keyAlias, null) as? SecretKey)?.let { return it }
-
-    return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEY_STORE).run {
-      init(
-        KeyGenParameterSpec.Builder(
-          keyAlias,
-          KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-        )
-          .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-          .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-          .setKeySize(256)
-          .setRandomizedEncryptionRequired(true)
-          .build()
-      )
-      generateKey()
-    }
-  }
+  private fun secretKey(): SecretKey = keyProvider.getOrCreateKey(keyAlias)
 
   private companion object {
-    val TEST_KEYS = ConcurrentHashMap<String, SecretKey>()
-    const val ANDROID_KEY_STORE = "AndroidKeyStore"
     const val TRANSFORMATION = "AES/GCM/NoPadding"
     const val TAG_BITS = 128
   }

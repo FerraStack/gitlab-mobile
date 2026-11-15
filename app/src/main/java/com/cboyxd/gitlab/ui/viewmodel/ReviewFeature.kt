@@ -66,12 +66,31 @@ class ReviewFeature internal constructor(
           d.copy(mergeRequest = d.mergeRequest.settle(r.map { mr -> mr.copy(labelDetails = mr.labelDetails.ifEmpty { known }) as GitLabMergeRequest? }))
         }
       }
-      launch { val r = host.api { repo.getMergeRequestDiffs(it, projectId, iid) }; apply(projectId, iid) { it.copy(diffs = it.diffs.settle(r)) } }
       launch {
-        val r = host.api { repo.getMergeRequestDiscussions(it, projectId, iid) }
+        val r = host.api { repo.getMergeRequestDiffsPage(it, projectId, iid) }
+        val slice = r.getOrNull()
+        apply(projectId, iid) {
+          it.copy(
+            diffs = it.diffs.settle(r.map { page -> page.items }),
+            diffsTotalCount = slice?.totalCount,
+            diffsTruncated = slice?.truncated == true,
+          )
+        }
+      }
+      launch {
+        val r = host.api { repo.getMergeRequestDiscussionsPage(it, projectId, iid) }
+        val slice = r.getOrNull()
+        val threadsResult = r.map { it.items }
         // Show the threads now; their diff previews need a compare request per revision pair.
-        apply(projectId, iid) { it.copy(discussions = it.discussions.settle(r), notes = it.notes.settle(r.map { threads -> threads.flatMap { d -> d.notes }.distinctBy { n -> n.id } })) }
-        val previews = r.getOrNull()?.let { threads -> host.api { Result.success(repo.getDiscussionDiffs(it, projectId, threads)) }.getOrDefault(emptyMap()) }.orEmpty()
+        apply(projectId, iid) {
+          it.copy(
+            discussions = it.discussions.settle(threadsResult),
+            notes = it.notes.settle(threadsResult.map { threads -> threads.flatMap { d -> d.notes }.distinctBy { n -> n.id } }),
+            discussionsTotalCount = slice?.totalCount,
+            discussionsTruncated = slice?.truncated == true,
+          )
+        }
+        val previews = slice?.items?.let { threads -> host.api { Result.success(repo.getDiscussionDiffs(it, projectId, threads)) }.getOrDefault(emptyMap()) }.orEmpty()
         if (previews.isNotEmpty()) apply(projectId, iid) { it.copy(discussionDiffs = previews) }
       }
       launch { val r = host.api { repo.getMergeRequestCommits(it, projectId, iid) }; apply(projectId, iid) { it.copy(commits = it.commits.settle(r)) } }

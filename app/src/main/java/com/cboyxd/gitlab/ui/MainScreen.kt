@@ -478,6 +478,7 @@ private fun Destination(
   val labelsFor: (Long) -> Map<String, GitLabLabel> = remember(uiState.labels) {
     { projectId -> uiState.labels[projectId].orEmpty() }
   }
+  val baseWebUrl = uiState.activeInstance?.url?.trimEnd('/')?.takeIf { it.isNotBlank() }
   val isTwoPane = isExpanded && (
     (destination == ScreenDestination.MainTabs && tab == BottomTab.INBOX) ||
       destination == ScreenDestination.IssuesList ||
@@ -596,6 +597,8 @@ private fun Destination(
               onRetry = refreshDashboard,
               onBack = back,
               modifier = Modifier.weight(0.42f).fillMaxHeight(),
+              truncated = uiState.issuesTruncated,
+              onOpenInBrowser = baseWebUrl?.let { base -> { browser("$base/dashboard/issues") } },
             )
             Box(Modifier.width(1.dp).fillMaxHeight().background(c.border))
             Box(Modifier.weight(0.58f).fillMaxHeight().testTag("two_pane_detail")) {
@@ -626,6 +629,8 @@ private fun Destination(
             onCreateIssue = viewModel::createIssue,
             onRetry = refreshDashboard,
             onBack = back,
+            truncated = uiState.issuesTruncated,
+            onOpenInBrowser = baseWebUrl?.let { base -> { browser("$base/dashboard/issues") } },
           )
         }
         ScreenDestination.MergeRequestsList -> if (isExpanded) {
@@ -644,6 +649,8 @@ private fun Destination(
               onRetry = refreshDashboard,
               onBack = back,
               modifier = Modifier.weight(0.42f).fillMaxHeight(),
+              truncated = uiState.mergeRequestsTruncated,
+              onOpenInBrowser = baseWebUrl?.let { base -> { browser("$base/dashboard/merge_requests") } },
             )
             Box(Modifier.width(1.dp).fillMaxHeight().background(c.border))
             Box(Modifier.weight(0.58f).fillMaxHeight().testTag("two_pane_detail")) {
@@ -675,6 +682,8 @@ private fun Destination(
             onLoadBranches = viewModel.review::branches,
             onRetry = refreshDashboard,
             onBack = back,
+            truncated = uiState.mergeRequestsTruncated,
+            onOpenInBrowser = baseWebUrl?.let { base -> { browser("$base/dashboard/merge_requests") } },
           )
         }
         ScreenDestination.PipelinesList -> PipelinesScreen(
@@ -684,6 +693,8 @@ private fun Destination(
           onRetryPipeline = viewModel::retryPipeline,
           onOpenPipeline = { viewModel.ci.openPipeline(it.projectId, it.id) },
           onBack = back,
+          truncated = uiState.pipelinesTruncated,
+          onOpenInBrowser = baseWebUrl?.let { base -> { browser(base) } },
         )
         ScreenDestination.GroupsList -> GroupsScreen(
           groups = uiState.groups,

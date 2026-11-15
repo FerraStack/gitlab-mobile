@@ -615,6 +615,30 @@ fun InlineError(message: String, modifier: Modifier = Modifier, onRetry: (() -> 
   }
 }
 
+/** Notice strip when a bounded fetch reaches its page cap without loading every item. */
+@Composable
+fun TruncationNotice(
+  message: String,
+  modifier: Modifier = Modifier,
+  onOpenInBrowser: (() -> Unit)? = null,
+) {
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(GlRadius.control))
+      .background(Gl.colors.surface2)
+      .border(1.dp, Gl.colors.border, RoundedCornerShape(GlRadius.control))
+      .padding(start = 12.dp, end = if (onOpenInBrowser != null) 4.dp else 12.dp, top = 4.dp, bottom = 4.dp)
+      .heightIn(min = 44.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(message, style = Gl.type.meta, color = Gl.colors.textSecondary, modifier = Modifier.weight(1f))
+    if (onOpenInBrowser != null) {
+      GlButton(text = "Open in GitLab", onClick = onOpenInBrowser, kind = GlButtonKind.Ghost)
+    }
+  }
+}
+
 @Composable
 fun LoadingPlaceholder(modifier: Modifier = Modifier) {
   Box(modifier.width(28.dp).height(12.dp)

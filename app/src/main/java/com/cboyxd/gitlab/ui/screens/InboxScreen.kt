@@ -70,8 +70,6 @@ import com.cboyxd.gitlab.ui.components.GlFilterRow
 import com.cboyxd.gitlab.ui.components.GlIconAction
 import com.cboyxd.gitlab.ui.components.GlLargeHeader
 import com.cboyxd.gitlab.ui.components.InlineError
-import com.cboyxd.gitlab.ui.components.ListsDropdownFilter
-import com.cboyxd.gitlab.ui.components.ListsFilterBar
 import com.cboyxd.gitlab.ui.components.LoadingState
 import com.cboyxd.gitlab.ui.components.Tone
 import com.cboyxd.gitlab.ui.theme.Gl
@@ -79,7 +77,6 @@ import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.GitLabNotification
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.InboxFilter
-import com.cboyxd.gitlab.ui.viewmodel.InboxTypeFilter
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
 
 private val AssignedActions = setOf("assigned", "review_requested", "approval_required")
