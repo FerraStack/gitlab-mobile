@@ -126,7 +126,7 @@ data class NotificationDiagnostics(
     if (instantEnabled && !instantRunning) {
       add(Finding(Severity.PROBLEM, "Instant notifications aren't running", "Android stopped the service. Opening the app starts it again."))
     }
-    if (scheduled == null || scheduled.state in setOf("CANCELLED", "FAILED")) {
+    if (permissionGranted && appNotificationsEnabled && (scheduled == null || scheduled.state in setOf("CANCELLED", "FAILED"))) {
       add(Finding(Severity.PROBLEM, "No background check is scheduled", "Open the app once to schedule it again."))
     }
     accounts.filter { it.lastOk == false }.forEach {

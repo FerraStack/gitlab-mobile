@@ -23,16 +23,22 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.cboyxd.gitlab.MainActivity
 import com.cboyxd.gitlab.R
+import com.cboyxd.gitlab.data.model.GitLabInstance
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 object GitLabNotifications {
   const val ACTION_OPEN = "com.cboyxd.gitlab.OPEN_NOTIFICATION"
+  const val ACTION_MARK_DONE = "com.cboyxd.gitlab.MARK_NOTIFICATION_DONE"
+  const val ACTION_OPEN_ACCOUNTS = "com.cboyxd.gitlab.OPEN_ACCOUNTS"
   const val EXTRA_ACCOUNT = "account_id"
+  const val EXTRA_ACCOUNT_NAME = "account_name"
   const val EXTRA_TARGET = "target_type"
   const val EXTRA_PROJECT = "project_id"
   const val EXTRA_IID = "target_iid"
   const val EXTRA_URL = "target_url"
+  const val EXTRA_TODO_ID = "todo_id"
+  const val EXTRA_NOTIFICATION_TAG = "notification_tag"
   internal const val EXTRA_TOKEN = "open_token"
   internal const val REVIEWS = "gitlab_reviews"
   internal const val ACTIVITY = "gitlab_activity"
@@ -64,10 +70,10 @@ object GitLabNotifications {
   fun schedule(context: Context, hasAccounts: Boolean) {
     createChannels(context)
     val work = WorkManager.getInstance(context)
-    if (!hasAccounts) {
+    if (!hasAccounts || !allowed(context)) {
       work.cancelUniqueWork(PERIODIC)
       work.cancelUniqueWork(IMMEDIATE)
-      NotificationManagerCompat.from(context).cancelAll()
+      if (!hasAccounts) NotificationManagerCompat.from(context).cancelAll()
       return
     }
     val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -80,11 +86,12 @@ object GitLabNotifications {
   /** Posts [event]; false when notifications are off or the permission was just revoked. */
   internal fun show(context: Context, event: GitLabNotificationEvent, now: Long = System.currentTimeMillis()): Boolean {
     if (!allowed(context)) return false
+    val tag = "${event.accountId}:${event.id}"
     val intent = openIntent(context, event)
     val click = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     // A late check must not make an old event look new: say how old it is instead of a bare time.
     val delay = NotificationPresentation.delayLabel(event.createdAt, now)
-    val notification = NotificationCompat.Builder(context, event.channel)
+    val builder = NotificationCompat.Builder(context, event.channel)
       .setSmallIcon(R.drawable.ic_notification)
       .setContentTitle(event.title)
       .setContentText(event.message)
@@ -99,9 +106,28 @@ object GitLabNotifications {
       .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
       .setGroup(groupKey(event.accountId))
       .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
-      .build()
+
+    val todoId = event.todoId ?: event.id.takeIf { it.startsWith("todo:") }?.removePrefix("todo:")?.toLongOrNull()
+    if (todoId != null && todoId > 0L) {
+      val doneIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+        action = ACTION_MARK_DONE
+        data = Uri.Builder().scheme("gitlab-mobile").authority("mark-done").appendPath(event.accountId).appendPath(todoId.toString()).build()
+        putExtra(EXTRA_ACCOUNT, event.accountId)
+        putExtra(EXTRA_ACCOUNT_NAME, event.accountName)
+        putExtra(EXTRA_TODO_ID, todoId)
+        putExtra(EXTRA_NOTIFICATION_TAG, tag)
+      }
+      val markDonePending = PendingIntent.getBroadcast(
+        context,
+        todoId.hashCode(),
+        doneIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      builder.addAction(0, "Mark as done", markDonePending)
+    }
+
     return try {
-      NotificationManagerCompat.from(context).notify("${event.accountId}:${event.id}", 0, notification)
+      NotificationManagerCompat.from(context).notify(tag, 0, builder.build())
       updateSummary(context, event.accountId, event.accountName)
       true
     } catch (_: SecurityException) {
@@ -150,9 +176,42 @@ object GitLabNotifications {
     return MessageDigest.isEqual(provided.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))
   }
 
+  /** Posts a single prompt telling the user to re-authenticate [account] so notifications resume. */
+  internal fun showAuthFailure(context: Context, account: GitLabInstance): Boolean {
+    if (!allowed(context)) return false
+    val intent = Intent(context, MainActivity::class.java).apply {
+      action = ACTION_OPEN_ACCOUNTS
+      data = Uri.Builder().scheme("gitlab-mobile").authority("auth-failure").appendPath(account.id).build()
+      flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      putExtra(EXTRA_ACCOUNT, account.id)
+    }
+    val click = PendingIntent.getActivity(context, account.id.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    val notification = NotificationCompat.Builder(context, ACTIVITY)
+      .setSmallIcon(R.drawable.ic_notification)
+      .setContentTitle("Sign in again to keep getting notifications")
+      .setContentText(account.name)
+      .setContentIntent(click)
+      .setAutoCancel(true)
+      .setCategory(NotificationCompat.CATEGORY_STATUS)
+      .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+      .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+      .build()
+    return try {
+      NotificationManagerCompat.from(context).notify("${account.id}:$AUTH_FAILURE", 0, notification)
+      true
+    } catch (_: SecurityException) {
+      false
+    }
+  }
+
+  internal fun clearAuthFailure(context: Context, accountId: String) {
+    NotificationManagerCompat.from(context).cancel("$accountId:$AUTH_FAILURE", 0)
+  }
+
   private fun groupKey(accountId: String) = "gitlab:$accountId"
 
   private const val SUMMARY = "summary"
+  internal const val AUTH_FAILURE = "auth_failure"
 
   /**
    * One InboxStyle summary per account once it has two or more visible events, so several
@@ -162,8 +221,9 @@ object GitLabNotifications {
   internal fun updateSummary(context: Context, accountId: String, accountName: String) {
     val manager = context.getSystemService(NotificationManager::class.java) ?: return
     val summaryTag = "$accountId:$SUMMARY"
+    val authTag = "$accountId:$AUTH_FAILURE"
     val events = manager.activeNotifications
-      .filter { it.tag?.startsWith("$accountId:") == true && it.tag != summaryTag }
+      .filter { it.tag?.startsWith("$accountId:") == true && it.tag != summaryTag && it.tag != authTag }
       .sortedByDescending { it.notification.`when` }
       .map {
         val extras = it.notification.extras

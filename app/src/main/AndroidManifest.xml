@@ -98,6 +98,10 @@
             android:name=".notifications.InstantAlarmReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".notifications.NotificationActionReceiver"
+            android:exported="false" />
+
         <!-- Only the system can send these protected broadcasts. -->
         <receiver
             android:name=".notifications.InstantStartReceiver"

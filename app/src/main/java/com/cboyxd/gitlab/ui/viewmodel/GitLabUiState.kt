@@ -92,6 +92,12 @@ enum class InboxFilter(val label: String) {
   MENTIONED("Mentioned")
 }
 
+enum class InboxTypeFilter(val label: String, val apiType: String?) {
+  ALL("All types", null),
+  ISSUE("Issues", "Issue"),
+  MERGE_REQUEST("Merge requests", "MergeRequest"),
+}
+
 data class GitLabNotification(
   val id: String,
   val type: NotificationType,
@@ -295,6 +301,9 @@ data class GitLabUiState(
   val pipelinesTruncated: Boolean = false,
   val notifications: Loadable<List<GitLabNotification>> = emptyFeed(),
   val inboxFilter: InboxFilter = InboxFilter.ALL,
+  val inboxTypeFilter: InboxTypeFilter = InboxTypeFilter.ALL,
+  val inboxProjectId: Long? = null,
+  val inboxAuthorId: Long? = null,
 
   val searchQuery: String = "",
   val searchResults: Loadable<List<GitLabProject>> = emptyFeed(),

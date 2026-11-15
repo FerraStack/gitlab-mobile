@@ -157,6 +157,10 @@ class InstanceStore(
   fun findExistingAccount(instance: GitLabInstance): GitLabInstance? =
     runCatching { getInstances().firstOrNull { it.sameAccountAs(instance) } }.getOrNull()
 
+  /** Marks or clears an authentication failure for [instanceId] so background polling stops until re-authenticated. */
+  fun setAuthFailure(instanceId: String, failed: Boolean): Boolean =
+    patch(instanceId) { if (it.authFailure == failed) it else it.copy(authFailure = failed) } != null
+
   fun getGitLabComClientId(): String = prefs.getString(KEY_OAUTH_CLIENT_ID, "").orEmpty()
 
   fun setGitLabComClientId(clientId: String) {
@@ -220,6 +224,13 @@ class InstanceStore(
           shared = it
           sharedApp = app
         }
+      }
+    }
+
+    internal fun resetForTests() {
+      synchronized(this) {
+        shared = null
+        sharedApp = null
       }
     }
 

@@ -72,6 +72,9 @@ data class PagedSlice<T>(
   val truncated: Boolean = false,
 )
 
+/** Items fetched from GitLab along with the server's Date header in epoch millis, when present. */
+data class ServerFeed<T>(val items: List<T>, val serverTimeMs: Long?)
+
 data class ConnectionProbe(
   val version: String,
   val username: String,
@@ -343,10 +346,14 @@ class GitLabRepository {
     }
   }
 
-  /** Raw timestamps are retained for background event detection. */
-  suspend fun getNotificationMergeRequests(instance: GitLabInstance, scope: String, updatedAfter: String? = null): Result<List<GitLabMergeRequest>> = call {
+  /** Raw timestamps are retained for background event detection, along with the server's Date header. */
+  suspend fun getNotificationMergeRequestsFeed(
+    instance: GitLabInstance,
+    scope: String,
+    updatedAfter: String? = null,
+  ): Result<ServerFeed<GitLabMergeRequest>> = call {
     requireToken(instance)
-    fetchPages(maxPages = 5) { page ->
+    fetchPagesWithServerTime(maxPages = 5) { page ->
       service(instance).getMergeRequests(
         scope = if (scope == "reviews_for_me" && instance.username.isNotBlank()) "all" else scope,
         reviewerUsername = instance.username.takeIf { scope == "reviews_for_me" && it.isNotBlank() },
@@ -358,6 +365,13 @@ class GitLabRepository {
       )
     }
   }
+
+  /** Raw timestamps are retained for background event detection. */
+  suspend fun getNotificationMergeRequests(
+    instance: GitLabInstance,
+    scope: String,
+    updatedAfter: String? = null,
+  ): Result<List<GitLabMergeRequest>> = getNotificationMergeRequestsFeed(instance, scope, updatedAfter).map { it.items }
 
   suspend fun getMergeRequest(instance: GitLabInstance, projectId: Long, iid: Long): Result<GitLabMergeRequest> = call {
     service(instance).getMergeRequest(projectId, iid).requireBody().withDisplayTimes()
@@ -657,18 +671,82 @@ class GitLabRepository {
     readReadme(service(instance), projectId, ref)
   }
 
-  suspend fun getTodos(instance: GitLabInstance): Result<List<GitLabTodo>> = call {
-    if (instance.token.isBlank()) return@call emptyList()
+  suspend fun getTodosFeed(
+    instance: GitLabInstance,
+    state: String? = null,
+    action: String? = null,
+    type: String? = null,
+    projectId: Long? = null,
+    authorId: Long? = null,
+  ): Result<ServerFeed<GitLabTodo>> = call {
+    if (instance.token.isBlank()) return@call ServerFeed(emptyList(), null)
     val service = service(instance)
-    coroutineScope {
-      val pending = async { fetchPages(maxPages = 2) { page -> service.getTodos(state = "pending", perPage = 100, page = page) } }
-      val done = async {
-        runCatchingApi { fetchPages(maxPages = 1) { page -> service.getTodos(state = "done", perPage = 30, page = page) } }
-          .getOrDefault(emptyList())
+    if (state != null) {
+      val maxPages = if (state == "pending") 2 else 1
+      val perPage = if (state == "pending") 100 else 30
+      return@call fetchPagesWithServerTime(maxPages = maxPages) { page ->
+        service.getTodos(
+          state = state,
+          action = action,
+          type = type,
+          projectId = projectId,
+          authorId = authorId,
+          perPage = perPage,
+          page = page,
+        )
       }
-      (pending.await() + done.await()).distinctBy { it.id }
+    }
+    coroutineScope {
+      val pending = async {
+        fetchPagesWithServerTime(maxPages = 2) { page ->
+          service.getTodos(
+            state = "pending",
+            action = action,
+            type = type,
+            projectId = projectId,
+            authorId = authorId,
+            perPage = 100,
+            page = page,
+          )
+        }
+      }
+      val done = async {
+        runCatchingApi {
+          fetchPagesWithServerTime(maxPages = 1) { page ->
+            service.getTodos(
+              state = "done",
+              action = action,
+              type = type,
+              projectId = projectId,
+              authorId = authorId,
+              perPage = 30,
+              page = page,
+            )
+          }
+        }.getOrDefault(ServerFeed(emptyList(), null))
+      }
+      val pendingFeed = pending.await()
+      val doneFeed = done.await()
+      val serverTime = listOfNotNull(pendingFeed.serverTimeMs, doneFeed.serverTimeMs).maxOrNull()
+      ServerFeed((pendingFeed.items + doneFeed.items).distinctBy { it.id }, serverTime)
     }
   }
+
+  suspend fun getTodos(
+    instance: GitLabInstance,
+    state: String? = null,
+    action: String? = null,
+    type: String? = null,
+    projectId: Long? = null,
+    authorId: Long? = null,
+  ): Result<List<GitLabTodo>> = getTodosFeed(
+    instance = instance,
+    state = state,
+    action = action,
+    type = type,
+    projectId = projectId,
+    authorId = authorId,
+  ).map { it.items }
 
   suspend fun markTodoDone(instance: GitLabInstance, todoId: Long): Result<Unit> = call {
     requireToken(instance)
@@ -1150,6 +1228,28 @@ class GitLabRepository {
       page = next
     }
     return PagedSlice(items = all, totalCount = total, truncated = false)
+  }
+
+  private suspend fun <T> fetchPagesWithServerTime(
+    maxPages: Int,
+    request: suspend (page: Int) -> Response<List<T>>
+  ): ServerFeed<T> {
+    val all = mutableListOf<T>()
+    var serverTimeMs: Long? = null
+    var page = 1
+    for (attempt in 0 until maxPages) {
+      val response = request(page)
+      if (!response.isSuccessful) throw response.toGitLabException()
+      response.headers().getDate("Date")?.time?.let { dateMs ->
+        serverTimeMs = maxOf(serverTimeMs ?: Long.MIN_VALUE, dateMs)
+      }
+      val chunk = response.body().orEmpty()
+      all += chunk
+      val next = response.headers()["X-Next-Page"]?.toIntOrNull()
+      if (next == null || next <= page || chunk.isEmpty()) return ServerFeed(all, serverTimeMs)
+      page = next
+    }
+    return ServerFeed(all, serverTimeMs)
   }
 
   /** Converts expected failures into Result; cancellation and fatal JVM errors propagate. */

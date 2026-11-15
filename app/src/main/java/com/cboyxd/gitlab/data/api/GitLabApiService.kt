@@ -653,6 +653,10 @@ interface GitLabApiService {
   @GET("api/v4/todos")
   suspend fun getTodos(
     @Query("state") state: String? = null,
+    @Query("action") action: String? = null,
+    @Query("type") type: String? = null,
+    @Query("project_id") projectId: Long? = null,
+    @Query("author_id") authorId: Long? = null,
     @Query("per_page") perPage: Int = 50,
     @Query("page") page: Int = 1
   ): Response<List<GitLabTodo>>

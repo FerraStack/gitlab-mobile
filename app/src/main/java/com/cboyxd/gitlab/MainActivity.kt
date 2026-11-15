@@ -110,6 +110,11 @@ class MainActivity : ComponentActivity() {
       setIntent(Intent(this, MainActivity::class.java))
       return
     }
+    if (intent?.action == GitLabNotifications.ACTION_OPEN_ACCOUNTS) {
+      viewModel.openAccountsScreen()
+      setIntent(Intent(this, MainActivity::class.java))
+      return
+    }
     if (intent == null) return
     val data = intent.data
     if (data != null && IncomingLinks.isOAuthRedirect(intent.dataString)) {
