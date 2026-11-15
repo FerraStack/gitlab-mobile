@@ -375,7 +375,7 @@ fun MainScreen(viewModel: GitLabViewModel, onExit: () -> Unit) {
       }
     }
   }
-
+  }
   }
 
   if (showSwitcher) {
