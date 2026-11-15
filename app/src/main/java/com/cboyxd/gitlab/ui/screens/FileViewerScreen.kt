@@ -125,7 +125,7 @@ fun FileViewerScreen(
 
   Column(modifier = modifier.fillMaxSize().background(c.bg)) {
     if (selection != null && showingCode) {
-      val lines = remember(content) { content.orEmpty().lines() }
+      val lines = remember(content) { content.orEmpty().replace("\r\n", "\n").replace('\r', '\n').split('\n') }
       val label = if (selection.first == selection.last) "Line ${selection.first}" else "Lines ${selection.first} to ${selection.last}"
       FileBar(background = c.surface3) {
         IconButton(onClick = clearSelection) {
@@ -219,15 +219,13 @@ fun FileViewerScreen(
       content.isEmpty() -> FullScreenState {
         EmptyState(Icons.Outlined.Difference, "Empty file", "This file has no content.")
       }
-      isMarkdown && preview -> Column(
-        modifier = Modifier
-          .fillMaxSize()
-          .verticalScroll(rememberScrollState())
-          .padding(GlSpace.margin),
-      ) {
-        MarkdownText(content, context = markdown)
-        Spacer(Modifier.height(GlSpace.group))
-      }
+      isMarkdown && preview -> MarkdownText(
+        markdown = content,
+        context = markdown,
+        lazy = true,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(GlSpace.margin),
+      )
       else -> LazyCodeView(
         code = content,
         path = state.path,

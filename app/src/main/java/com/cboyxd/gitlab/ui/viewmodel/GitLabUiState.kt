@@ -96,6 +96,12 @@ enum class InboxFilter(val label: String) {
   MENTIONED("Mentioned")
 }
 
+enum class InboxTypeFilter(val label: String, val apiType: String?) {
+  ALL("All types", null),
+  ISSUE("Issues", "Issue"),
+  MERGE_REQUEST("Merge requests", "MergeRequest"),
+}
+
 data class GitLabNotification(
   val id: String,
   val type: NotificationType,
@@ -148,6 +154,8 @@ data class ProjectDetailState(
   val ref: String? = null,
   val treePath: String = "",
   val tree: Loadable<List<GitLabTreeItem>> = emptyFeed(),
+  val treeTotalCount: Int? = null,
+  val treeTruncated: Boolean = false,
   val issues: Loadable<List<GitLabIssue>> = emptyFeed(),
   val mergeRequests: Loadable<List<GitLabMergeRequest>> = emptyFeed(),
   val pipelines: Loadable<List<GitLabPipeline>> = emptyFeed(),
@@ -166,7 +174,9 @@ data class ProjectDetailState(
   val mergeRequestState: String = "opened",
   val mergeRequestsNextPage: Int? = null,
   val mergeRequestCounts: Map<String, Int> = emptyMap(),
-  /** A "Load more" request for issues or merge requests is running. */
+  val pipelinesNextPage: Int? = null,
+  val commitsNextPage: Int? = null,
+  /** A "Load more" request for a paged project section is running. */
   val loadingMore: Boolean = false,
   /** The last "Load more" failed: the list waits for a tap instead of retrying as it scrolls. */
   val loadMoreFailed: Boolean = false,
@@ -180,6 +190,8 @@ data class CommitDetailState(
   val sha: String = "",
   val commit: Loadable<GitLabCommit?> = Loadable(null),
   val diffs: Loadable<List<GitLabFileDiff>> = emptyFeed(),
+  val diffsTotalCount: Int? = null,
+  val diffsTruncated: Boolean = false,
 )
 
 data class PipelineDetailState(
@@ -264,8 +276,12 @@ data class MergeRequestDetailState(
   val iid: Long = 0,
   val mergeRequest: Loadable<GitLabMergeRequest?> = Loadable(null),
   val diffs: Loadable<List<GitLabFileDiff>> = emptyFeed(),
+  val diffsTotalCount: Int? = null,
+  val diffsTruncated: Boolean = false,
   val notes: Loadable<List<GitLabNote>> = emptyFeed(),
   val discussions: Loadable<List<com.cboyxd.gitlab.data.model.GitLabDiscussion>> = emptyFeed(),
+  val discussionsTotalCount: Int? = null,
+  val discussionsTruncated: Boolean = false,
   val discussionDiffs: Map<String, GitLabFileDiff> = emptyMap(),
   val commits: Loadable<List<GitLabCommit>> = emptyFeed(),
   val pipelines: Loadable<List<GitLabPipeline>> = emptyFeed(),
@@ -300,10 +316,16 @@ data class GitLabUiState(
   val projects: Loadable<List<GitLabProject>> = emptyFeed(),
   val groups: Loadable<List<GitLabGroup>> = emptyFeed(),
   val issues: Loadable<List<GitLabIssue>> = emptyFeed(),
+  val issuesTruncated: Boolean = false,
   val mergeRequests: Loadable<List<GitLabMergeRequest>> = emptyFeed(),
+  val mergeRequestsTruncated: Boolean = false,
   val pipelines: Loadable<List<GitLabPipeline>> = emptyFeed(),
+  val pipelinesTruncated: Boolean = false,
   val notifications: Loadable<List<GitLabNotification>> = emptyFeed(),
   val inboxFilter: InboxFilter = InboxFilter.ALL,
+  val inboxTypeFilter: InboxTypeFilter = InboxTypeFilter.ALL,
+  val inboxProjectId: Long? = null,
+  val inboxAuthorId: Long? = null,
 
   val searchQuery: String = "",
   val searchResults: Loadable<List<GitLabProject>> = emptyFeed(),

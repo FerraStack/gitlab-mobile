@@ -10,11 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
@@ -42,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
@@ -327,6 +327,7 @@ fun DiffLineRow(
     else -> Color.Transparent to " "
   }
   val markColor = c.accent
+  val borderColor = c.border
   Row(
     modifier = modifier
       .fillMaxWidth()
@@ -337,8 +338,12 @@ fun DiffLineRow(
         if (commented) drawRect(markColor, size = Size(4.dp.toPx(), size.height))
       }
       .then(if (scrollState != null) Modifier.horizontalScroll(scrollState).width(codeWidth) else Modifier)
-      .height(IntrinsicSize.Min)
       .background(bg)
+      .drawWithContent {
+        drawContent()
+        val x = gutter.toPx() * numberColumns + 0.5.dp.toPx()
+        drawLine(borderColor, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.dp.toPx())
+      }
       .semantics(mergeDescendants = true) {
         contentDescription = when (line.kind) {
           DiffKind.Add -> "Added line ${line.newNo}: ${line.text}"
@@ -362,7 +367,6 @@ fun DiffLineRow(
         textAlign = androidx.compose.ui.text.style.TextAlign.End,
       )
     }
-    Box(Modifier.width(1.dp).fillMaxHeight().background(c.border))
     Text(
       text = marker,
       style = Gl.type.monoSmall,
@@ -371,18 +375,20 @@ fun DiffLineRow(
         DiffKind.Remove -> c.danger
         else -> c.textTertiary
       },
-      modifier = Modifier.padding(start = 4.dp, top = 3.dp),
+      modifier = Modifier.padding(start = 5.dp, top = 3.dp),
     )
-    Text(
-      text = diffDisplayText(
-        if (options.syntaxColors) text ?: AnnotatedString(line.text) else AnnotatedString(line.text),
-        wrapped = scrollState == null,
-      ),
-      style = Gl.type.mono.copy(fontSize = options.fontSize.sp, lineHeight = (options.fontSize * 1.5).sp, lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)),
-      color = c.textPrimary,
-      softWrap = scrollState == null,
-      modifier = Modifier.weight(1f).padding(start = 4.dp, end = 8.dp, top = 1.dp, bottom = 1.dp),
-    )
+    SelectionContainer(modifier = Modifier.weight(1f)) {
+      Text(
+        text = diffDisplayText(
+          if (options.syntaxColors) text ?: AnnotatedString(line.text) else AnnotatedString(line.text),
+          wrapped = scrollState == null,
+        ),
+        style = Gl.type.mono.copy(fontSize = options.fontSize.sp, lineHeight = (options.fontSize * 1.5).sp, lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)),
+        color = c.textPrimary,
+        softWrap = scrollState == null,
+        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 1.dp, bottom = 1.dp),
+      )
+    }
   }
 }
 
@@ -457,6 +463,21 @@ fun DiffFileHeader(
 fun ellipsizeStart(text: String, max: Int): String =
   if (text.length <= max) text else "…" + text.takeLast(max - 1)
 
+/** Precomputed per-file layout bounds so lazy rows don't rescan every line on compose. */
+@Immutable
+data class DiffFileMetrics(val maxLine: Int, val maxColumns: Int)
+
+internal fun computeDiffFileMetrics(lines: List<DiffLine>): DiffFileMetrics {
+  var maxLine = 0
+  var maxColumns = 0
+  for (line in lines) {
+    val lineNo = maxOf(line.oldNo ?: 0, line.newNo ?: 0)
+    if (lineNo > maxLine) maxLine = lineNo
+    if (line.text.length > maxColumns) maxColumns = line.text.length
+  }
+  return DiffFileMetrics(maxLine = maxLine, maxColumns = maxColumns.coerceAtMost(MAX_DIFF_COLUMNS))
+}
+
 /**
  * A list of changed files for a LazyColumn: a sticky header per file, then its lines as
  * separate items so a huge change only composes what is on screen.
@@ -476,10 +497,11 @@ fun LazyListScope.diffFileItems(
   commented: Set<String> = emptySet(),
   /** Tapping a line starts a comment on it; null keeps lines inert. */
   onLineClick: ((file: Int, line: DiffLine) -> Unit)? = null,
+  metrics: Map<Int, DiffFileMetrics> = emptyMap(),
 ) {
   diffs.forEachIndexed { index, diff ->
     if (selectedFile != null && selectedFile != index) return@forEachIndexed
-    stickyHeader(key = "file-$index") {
+    stickyHeader(key = "file-$index", contentType = "diff-header") {
       Column {
         DiffFileHeader(
           diff = diff,
@@ -494,7 +516,7 @@ fun LazyListScope.diffFileItems(
     if (index in collapsed) return@forEachIndexed
     val lines = parsed[index]
     when {
-      diff.diff.isBlank() -> item(key = "file-$index-empty") {
+      diff.diff.isBlank() -> item(key = "file-$index-empty", contentType = "diff-empty") {
         Text(
           when {
             diff.tooLarge -> "GitLab excluded this diff because it is too large. View the file in GitLab."
@@ -507,18 +529,19 @@ fun LazyListScope.diffFileItems(
           modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
         )
       }
-      lines == null -> item(key = "file-$index-loading") { LoadingState(label = "Loading changes") }
+      lines == null -> item(key = "file-$index-loading", contentType = "diff-loading") { LoadingState(label = "Loading changes") }
       else -> {
-        val maxLine = lines.maxOfOrNull { maxOf(it.oldNo ?: 0, it.newNo ?: 0) } ?: 0
+        val fileMetrics = metrics[index] ?: computeDiffFileMetrics(lines)
+        val maxLine = fileMetrics.maxLine
         val texts = prepared[index]
-        val maxColumns = (lines.maxOfOrNull { it.text.length } ?: 0).coerceAtMost(MAX_DIFF_COLUMNS)
-        items(lines.size, key = { "file-$index-line-$it" }) { n ->
+        val maxColumns = fileMetrics.maxColumns
+        items(lines.size, key = { "file-$index-line-$it" }, contentType = { "diff-line" }) { n ->
           val gutter = rememberDiffGutterWidth(maxLine)
           val scroll = if (wrapLines) null else LocalDiffScrollStates.current.getOrPut(index) { ScrollState(0) }
           val screenWidth = LocalConfiguration.current.screenWidthDp.dp
           val options = LocalDiffDisplayOptions.current
           val fontScale = LocalDensity.current.fontScale
-          val width = remember(lines, screenWidth, gutter, options, fontScale) {
+          val width = remember(maxColumns, screenWidth, gutter, options, fontScale) {
             val gutters = gutter * (if (!options.showLineNumbers) 0 else if (options.dualLineNumbers) 2 else 1)
             diffCodeWidth(maxColumns, options.fontSize.toFloat(), fontScale, gutters, screenWidth)
           }
@@ -531,13 +554,14 @@ fun LazyListScope.diffFileItems(
         }
       }
     }
-    item(key = "file-$index-gap") { Spacer(Modifier.height(12.dp).fillMaxWidth().background(Gl.colors.sunken)) }
+    item(key = "file-$index-gap", contentType = "diff-gap") { Spacer(Modifier.height(12.dp).fillMaxWidth().background(Gl.colors.sunken)) }
   }
 }
 
-/** Parsed lines and their highlighted text, filled in file by file off the main thread. */
+/** Parsed lines, per-file metrics, and their highlighted text, filled in file by file off the main thread. */
 class PreparedDiffs {
   val parsed = mutableStateMapOf<Int, List<DiffLine>>()
+  val metrics = mutableStateMapOf<Int, DiffFileMetrics>()
   val texts = mutableStateMapOf<Int, List<AnnotatedString>>()
 }
 
@@ -551,7 +575,12 @@ fun rememberPreparedDiffs(diffs: List<GitLabFileDiff>): PreparedDiffs {
   val holder = remember(diffs, colors) { PreparedDiffs() }
   LaunchedEffect(holder) {
     diffs.forEachIndexed { index, diff ->
-      holder.parsed[index] = withContext(Dispatchers.Default) { parseUnifiedDiff(diff.diff) }
+      val (lines, fileMetrics) = withContext(Dispatchers.Default) {
+        val parsed = parseUnifiedDiff(diff.diff)
+        parsed to computeDiffFileMetrics(parsed)
+      }
+      holder.metrics[index] = fileMetrics
+      holder.parsed[index] = lines
     }
     diffs.forEachIndexed { index, diff ->
       val lines = holder.parsed[index] ?: return@forEachIndexed

@@ -13,11 +13,14 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
  * Saved servers, encrypted with an Android Keystore key. Reads are served from memory after the
  * first decrypt; every method blocks on disk or Keystore, so call it off the main thread.
  */
-class InstanceStore(context: Context) {
+class InstanceStore(
+  context: Context,
+  keyProvider: SecretKeyProvider = DefaultSecretKeyProvider,
+) {
 
   private val prefs: SharedPreferences =
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-  private val secretStore = AndroidKeyStoreSecretStore(context, SECRET_PREFS_NAME)
+  private val secretStore = AndroidKeyStoreSecretStore(context, SECRET_PREFS_NAME, keyProvider)
 
   private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
   private val listType = Types.newParameterizedType(List::class.java, GitLabInstance::class.java)
@@ -154,6 +157,10 @@ class InstanceStore(context: Context) {
   fun findExistingAccount(instance: GitLabInstance): GitLabInstance? =
     runCatching { getInstances().firstOrNull { it.sameAccountAs(instance) } }.getOrNull()
 
+  /** Marks or clears an authentication failure for [instanceId] so background polling stops until re-authenticated. */
+  fun setAuthFailure(instanceId: String, failed: Boolean): Boolean =
+    patch(instanceId) { if (it.authFailure == failed) it else it.copy(authFailure = failed) } != null
+
   fun getGitLabComClientId(): String = prefs.getString(KEY_OAUTH_CLIENT_ID, "").orEmpty()
 
   fun setGitLabComClientId(clientId: String) {
@@ -217,6 +224,13 @@ class InstanceStore(context: Context) {
           shared = it
           sharedApp = app
         }
+      }
+    }
+
+    internal fun resetForTests() {
+      synchronized(this) {
+        shared = null
+        sharedApp = null
       }
     }
 

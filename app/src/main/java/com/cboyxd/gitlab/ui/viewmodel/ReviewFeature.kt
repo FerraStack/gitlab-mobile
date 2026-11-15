@@ -66,12 +66,31 @@ class ReviewFeature internal constructor(
           d.copy(mergeRequest = d.mergeRequest.settle(r.map { mr -> mr.copy(labelDetails = mr.labelDetails.ifEmpty { known }) as GitLabMergeRequest? }))
         }
       }
-      launch { val r = host.api { repo.getMergeRequestDiffs(it, projectId, iid) }; apply(projectId, iid) { it.copy(diffs = it.diffs.settle(r)) } }
       launch {
-        val r = host.api { repo.getMergeRequestDiscussions(it, projectId, iid) }
+        val r = host.api { repo.getMergeRequestDiffsPage(it, projectId, iid) }
+        val slice = r.getOrNull()
+        apply(projectId, iid) {
+          it.copy(
+            diffs = it.diffs.settle(r.map { page -> page.items }),
+            diffsTotalCount = slice?.totalCount,
+            diffsTruncated = slice?.truncated == true,
+          )
+        }
+      }
+      launch {
+        val r = host.api { repo.getMergeRequestDiscussionsPage(it, projectId, iid) }
+        val slice = r.getOrNull()
+        val threadsResult = r.map { it.items }
         // Show the threads now; their diff previews need a compare request per revision pair.
-        apply(projectId, iid) { it.copy(discussions = it.discussions.settle(r), notes = it.notes.settle(r.map { threads -> threads.flatMap { d -> d.notes }.distinctBy { n -> n.id } })) }
-        val threads = r.getOrNull()
+        apply(projectId, iid) {
+          it.copy(
+            discussions = it.discussions.settle(threadsResult),
+            notes = it.notes.settle(threadsResult.map { threads -> threads.flatMap { d -> d.notes }.distinctBy { n -> n.id } }),
+            discussionsTotalCount = slice?.totalCount,
+            discussionsTruncated = slice?.truncated == true,
+          )
+        }
+        val threads = slice?.items
         if (threads != null) {
           val noteIds = threads.flatMap { it.notes }.filterNot { it.system }.map { it.id }.distinct()
           if (noteIds.isNotEmpty()) {

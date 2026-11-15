@@ -89,18 +89,23 @@ private val LINE_BY_LINE = setOf(
   SyntaxLanguage.RUBY, SyntaxLanguage.PYTHON, SyntaxLanguage.SHELL, SyntaxLanguage.PERL, SyntaxLanguage.COFFEESCRIPT,
 )
 
+/** Normalizes CRLF and lone CR line endings to LF so line counts and spans match everywhere. */
+internal fun normalizeLineEndings(code: String): String =
+  if ('\r' in code) code.replace("\r\n", "\n").replace('\r', '\n') else code
+
 /** Highlights [code] as one AnnotatedString. Blocking; call off the main thread. */
 fun highlight(code: String, language: SyntaxLanguage, colors: GlColors): AnnotatedString {
-  if (code.length > MAX_HIGHLIGHT_CHARS) return AnnotatedString(code)
-  if (language in LINE_BY_LINE && '\n' in code) {
+  val normalized = normalizeLineEndings(code)
+  if (normalized.length > MAX_HIGHLIGHT_CHARS) return AnnotatedString(normalized)
+  if (language in LINE_BY_LINE && '\n' in normalized) {
     return buildAnnotatedString {
-      code.split('\n').forEachIndexed { index, line ->
+      normalized.split('\n').forEachIndexed { index, line ->
         if (index > 0) append('\n')
         append(highlightSpans(line, language, colors))
       }
     }
   }
-  return highlightSpans(code, language, colors)
+  return highlightSpans(normalized, language, colors)
 }
 
 private fun highlightSpans(code: String, language: SyntaxLanguage, colors: GlColors): AnnotatedString {
@@ -144,10 +149,11 @@ fun AnnotatedString.splitLines(): List<AnnotatedString> {
 @Composable
 fun rememberHighlightedLines(code: String, language: SyntaxLanguage): List<AnnotatedString> {
   val colors = Gl.colors
-  val plain = remember(code) { code.lines().map { AnnotatedString(it) } }
-  var highlighted by remember(code, language, colors) { mutableStateOf<List<AnnotatedString>?>(null) }
-  LaunchedEffect(code, language, colors) {
-    highlighted = withContext(Dispatchers.Default) { highlight(code, language, colors).splitLines() }
+  val normalized = remember(code) { normalizeLineEndings(code) }
+  val plain = remember(normalized) { normalized.split('\n').map { AnnotatedString(it) } }
+  var highlighted by remember(normalized, language, colors) { mutableStateOf<List<AnnotatedString>?>(null) }
+  LaunchedEffect(normalized, language, colors) {
+    highlighted = withContext(Dispatchers.Default) { highlight(normalized, language, colors).splitLines() }
   }
   return highlighted ?: plain
 }
@@ -155,22 +161,24 @@ fun rememberHighlightedLines(code: String, language: SyntaxLanguage): List<Annot
 @Composable
 fun rememberHighlighted(code: String, language: SyntaxLanguage): AnnotatedString {
   val colors = Gl.colors
-  var highlighted by remember(code, language, colors) { mutableStateOf(AnnotatedString(code)) }
-  LaunchedEffect(code, language, colors) {
-    highlighted = withContext(Dispatchers.Default) { highlight(code, language, colors) }
+  val normalized = remember(code) { normalizeLineEndings(code) }
+  var highlighted by remember(normalized, language, colors) { mutableStateOf(AnnotatedString(normalized)) }
+  LaunchedEffect(normalized, language, colors) {
+    highlighted = withContext(Dispatchers.Default) { highlight(normalized, language, colors) }
   }
   return highlighted
 }
 
 /** Source formatting for document files, plus multiline Python strings in diff hunks. */
 fun highlightForPath(code: String, path: String, colors: GlColors): AnnotatedString {
-  if (code.length > MAX_HIGHLIGHT_CHARS) return AnnotatedString(code)
+  val normalized = normalizeLineEndings(code)
+  if (normalized.length > MAX_HIGHLIGHT_CHARS) return AnnotatedString(normalized)
   val extension = path.substringAfterLast('.', "").lowercase()
   if (extension in setOf("md", "markdown", "mdown")) {
     return buildAnnotatedString {
-      append(code)
+      append(normalized)
       fun paint(pattern: String, color: Color, bold: Boolean = false) {
-        Regex(pattern, RegexOption.MULTILINE).findAll(code).forEach { match ->
+        Regex(pattern, RegexOption.MULTILINE).findAll(normalized).forEach { match ->
           addStyle(SpanStyle(color = color, fontWeight = if (bold) FontWeight.SemiBold else null), match.range.first, match.range.last + 1)
         }
       }
@@ -182,11 +190,11 @@ fun highlightForPath(code: String, path: String, colors: GlColors): AnnotatedStr
       paint("^[ \\t]*(```|~~~).*$", colors.syntaxComment)
     }
   }
-  val base = highlight(code, languageForPath(path), colors)
+  val base = highlight(normalized, languageForPath(path), colors)
   if (extension !in setOf("py", "pyi")) return base
   return buildAnnotatedString {
     append(base)
-    Regex("\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''").findAll(code).forEach { match ->
+    Regex("\"\"\"[\\s\\S]*?\"\"\"|'''[\\s\\S]*?'''").findAll(normalized).forEach { match ->
       addStyle(SpanStyle(color = colors.syntaxString), match.range.first, match.range.last + 1)
     }
   }

@@ -71,7 +71,17 @@ data class JobTrace(
 )
 
 /** One page of a list and the page after it, or null when this was the last. */
-data class ListPage<T>(val items: List<T>, val nextPage: Int?)
+data class ListPage<T>(val items: List<T>, val nextPage: Int?, val totalCount: Int? = null)
+
+/** Bounded multi-page fetch result retaining the server's total count and whether more pages exist. */
+data class PagedSlice<T>(
+  val items: List<T>,
+  val totalCount: Int? = null,
+  val truncated: Boolean = false,
+)
+
+/** Items fetched from GitLab along with the server's Date header in epoch millis, when present. */
+data class ServerFeed<T>(val items: List<T>, val serverTimeMs: Long?)
 
 data class ConnectionProbe(
   val version: String,
@@ -227,17 +237,27 @@ class GitLabRepository {
       .map { it.withDisplayTimes() }
   }
 
-  suspend fun getMyIssues(instance: GitLabInstance): Result<List<GitLabIssue>> = call {
-    if (instance.token.isBlank()) return@call emptyList()
+  suspend fun getMyIssues(instance: GitLabInstance): Result<List<GitLabIssue>> =
+    getMyIssuesPage(instance).map { it.items }
+
+  suspend fun getMyIssuesPage(instance: GitLabInstance): Result<PagedSlice<GitLabIssue>> = call {
+    if (instance.token.isBlank()) return@call PagedSlice(emptyList())
     val service = service(instance)
     coroutineScope {
-      val assigned = async { fetchPages(maxPages = 1) { page -> service.getIssues(scope = "assigned_to_me", perPage = 100, page = page) } }
+      val assigned = async { fetchSlice(maxPages = 1) { page -> service.getIssues(scope = "assigned_to_me", perPage = 100, page = page) } }
       val created = async {
-        runCatchingApi { fetchPages(maxPages = 1) { page -> service.getIssues(scope = "created_by_me", perPage = 100, page = page) } }
+        runCatchingApi { fetchSlice(maxPages = 1) { page -> service.getIssues(scope = "created_by_me", perPage = 100, page = page) } }
       }
-      val assignedList = assigned.await()
-      val createdList = created.await().getOrElse { error -> if (assignedList.isEmpty()) throw error else emptyList() }
-      (assignedList + createdList).distinctBy { it.projectId to it.iid }.newestFirst { it.updatedAt }.map { it.withDisplayTimes() }
+      val assignedSlice = assigned.await()
+      val createdSlice = created.await().getOrElse { error -> if (assignedSlice.items.isEmpty()) throw error else PagedSlice(emptyList()) }
+      val merged = (assignedSlice.items + createdSlice.items)
+        .distinctBy { it.projectId to it.iid }
+        .newestFirst { it.updatedAt }
+        .map { it.withDisplayTimes() }
+      PagedSlice(
+        items = merged,
+        truncated = assignedSlice.truncated || createdSlice.truncated,
+      )
     }
   }
 
@@ -321,35 +341,47 @@ class GitLabRepository {
     service(instance).createIssueNote(projectId, issueIid, body).requireBody().withDisplayTimes()
   }
 
-  suspend fun getMyMergeRequests(instance: GitLabInstance): Result<List<GitLabMergeRequest>> = call {
-    if (instance.token.isBlank()) return@call emptyList()
+  suspend fun getMyMergeRequests(instance: GitLabInstance): Result<List<GitLabMergeRequest>> =
+    getMyMergeRequestsPage(instance).map { it.items }
+
+  suspend fun getMyMergeRequestsPage(instance: GitLabInstance): Result<PagedSlice<GitLabMergeRequest>> = call {
+    if (instance.token.isBlank()) return@call PagedSlice(emptyList())
     val service = service(instance)
     coroutineScope {
-      val assigned = async { fetchPages(maxPages = 1) { page -> service.getMergeRequests(scope = "assigned_to_me", perPage = 100, page = page) } }
+      val assigned = async { fetchSlice(maxPages = 1) { page -> service.getMergeRequests(scope = "assigned_to_me", perPage = 100, page = page) } }
       val created = async {
-        runCatchingApi { fetchPages(maxPages = 1) { page -> service.getMergeRequests(scope = "created_by_me", perPage = 100, page = page) } }
+        runCatchingApi { fetchSlice(maxPages = 1) { page -> service.getMergeRequests(scope = "created_by_me", perPage = 100, page = page) } }
       }
       val reviews = async {
-        if (instance.username.isBlank()) emptyList()
+        if (instance.username.isBlank()) PagedSlice(emptyList())
         else runCatchingApi {
-          fetchPages(maxPages = 1) { page ->
+          fetchSlice(maxPages = 1) { page ->
             service.getMergeRequests(scope = "all", reviewerUsername = instance.username, state = "opened", perPage = 100, page = page)
           }
-        }.getOrDefault(emptyList())
+        }.getOrDefault(PagedSlice(emptyList()))
       }
-      val assignedList = assigned.await()
-      val createdList = created.await().getOrElse { error -> if (assignedList.isEmpty()) throw error else emptyList() }
-      (assignedList + createdList + reviews.await())
+      val assignedSlice = assigned.await()
+      val createdSlice = created.await().getOrElse { error -> if (assignedSlice.items.isEmpty()) throw error else PagedSlice(emptyList()) }
+      val reviewsSlice = reviews.await()
+      val merged = (assignedSlice.items + createdSlice.items + reviewsSlice.items)
         .distinctBy { it.projectId to it.iid }
         .newestFirst { it.updatedAt }
         .map { it.withDisplayTimes() }
+      PagedSlice(
+        items = merged,
+        truncated = assignedSlice.truncated || createdSlice.truncated || reviewsSlice.truncated,
+      )
     }
   }
 
-  /** Raw timestamps are retained for background event detection. */
-  suspend fun getNotificationMergeRequests(instance: GitLabInstance, scope: String, updatedAfter: String? = null): Result<List<GitLabMergeRequest>> = call {
+  /** Raw timestamps are retained for background event detection, along with the server's Date header. */
+  suspend fun getNotificationMergeRequestsFeed(
+    instance: GitLabInstance,
+    scope: String,
+    updatedAfter: String? = null,
+  ): Result<ServerFeed<GitLabMergeRequest>> = call {
     requireToken(instance)
-    fetchPages(maxPages = 5) { page ->
+    fetchPagesWithServerTime(maxPages = 5) { page ->
       service(instance).getMergeRequests(
         scope = if (scope == "reviews_for_me" && instance.username.isNotBlank()) "all" else scope,
         reviewerUsername = instance.username.takeIf { scope == "reviews_for_me" && it.isNotBlank() },
@@ -361,6 +393,13 @@ class GitLabRepository {
       )
     }
   }
+
+  /** Raw timestamps are retained for background event detection. */
+  suspend fun getNotificationMergeRequests(
+    instance: GitLabInstance,
+    scope: String,
+    updatedAfter: String? = null,
+  ): Result<List<GitLabMergeRequest>> = getNotificationMergeRequestsFeed(instance, scope, updatedAfter).map { it.items }
 
   suspend fun getMergeRequest(instance: GitLabInstance, projectId: Long, iid: Long): Result<GitLabMergeRequest> = call {
     service(instance).getMergeRequest(projectId, iid).requireBody().withDisplayTimes()
@@ -478,20 +517,42 @@ class GitLabRepository {
     instance: GitLabInstance,
     projectId: Long,
     mrIid: Long
-  ): Result<List<GitLabFileDiff>> = call {
+  ): Result<List<GitLabFileDiff>> = getMergeRequestDiffsPage(instance, projectId, mrIid).map { it.items }
+
+  suspend fun getMergeRequestDiffsPage(
+    instance: GitLabInstance,
+    projectId: Long,
+    mrIid: Long
+  ): Result<PagedSlice<GitLabFileDiff>> = call {
     val service = service(instance)
     try {
-      fetchPages(maxPages = 100) { page -> service.getMergeRequestDiffs(projectId, mrIid, perPage = 100, page = page) }
+      fetchSlice(maxPages = MAX_DIFF_PAGES) { page ->
+        service.getMergeRequestDiffs(projectId, mrIid, perPage = 100, page = page)
+      }
     } catch (error: GitLabApiException) {
       // The /diffs endpoint arrived in GitLab 15.7; older servers only have /changes.
       if (error.code != 404) throw error
-      service.getMergeRequestChanges(projectId, mrIid).requireBody().changes
+      val changes = service.getMergeRequestChanges(projectId, mrIid).requireBody().changes
+      PagedSlice(items = changes, totalCount = changes.size, truncated = false)
     }
   }
 
-  suspend fun getPipelines(instance: GitLabInstance, projectId: Long, perPage: Int = 20): Result<List<GitLabPipeline>> = call {
-    fetchPages(maxPages = 1) { page -> service(instance).getProjectPipelines(projectId, perPage = perPage, page = page) }
-      .map { it.withDisplayTimes() }
+  suspend fun getPipelines(instance: GitLabInstance, projectId: Long, perPage: Int = 20): Result<List<GitLabPipeline>> =
+    getPipelinesPage(instance, projectId, perPage = perPage, page = 1).map { it.items }
+
+  suspend fun getPipelinesPage(
+    instance: GitLabInstance,
+    projectId: Long,
+    perPage: Int = 20,
+    page: Int = 1,
+  ): Result<ListPage<GitLabPipeline>> = call {
+    val response = service(instance).getProjectPipelines(projectId, perPage = perPage, page = page)
+    if (!response.isSuccessful) throw response.toGitLabException()
+    ListPage(
+      items = response.body().orEmpty().map { it.withDisplayTimes() },
+      nextPage = nextPage(response, page),
+      totalCount = response.headers()["X-Total"]?.toIntOrNull(),
+    )
   }
 
   /**
@@ -503,19 +564,32 @@ class GitLabRepository {
     projects: List<GitLabProject>,
     projectLimit: Int = 8,
     total: Int = 20
-  ): Result<List<GitLabPipeline>> = call {
-    if (projects.isEmpty()) return@call emptyList()
+  ): Result<List<GitLabPipeline>> =
+    getRecentPipelinesPage(instance, projects, projectLimit = projectLimit, total = total).map { it.items }
+
+  suspend fun getRecentPipelinesPage(
+    instance: GitLabInstance,
+    projects: List<GitLabProject>,
+    projectLimit: Int = 8,
+    total: Int = 20
+  ): Result<PagedSlice<GitLabPipeline>> = call {
+    if (projects.isEmpty()) return@call PagedSlice(emptyList())
     val service = service(instance)
     val slots = Semaphore(4)
     val candidates = projects
       .sortedByDescending { parseGitLabMillis(it.lastActivityRaw) ?: 0L }
       .take(projectLimit)
+    val hasMore = java.util.concurrent.atomic.AtomicBoolean(projects.size > projectLimit)
     val listed = coroutineScope {
       candidates.map { project ->
         async {
           slots.withPermit {
             try {
-              service.getProjectPipelines(project.id, perPage = 5).requireList()
+              val response = service.getProjectPipelines(project.id, perPage = 5)
+              if (response.headers()["X-Next-Page"]?.toIntOrNull()?.let { it > 1 } == true) {
+                hasMore.set(true)
+              }
+              response.requireList()
             } catch (error: GitLabApiException) {
               // Projects without CI access answer 403; skip them rather than fail the list.
               emptyList()
@@ -524,8 +598,13 @@ class GitLabRepository {
         }
       }.awaitAll().flatten()
     }
-    val recent = listed.sortedByDescending { parseGitLabMillis(it.createdAt) ?: it.id }.take(total)
-    attachStages(service, recent.map { it.withDisplayTimes() }, limit = 6)
+    val sorted = listed.sortedByDescending { parseGitLabMillis(it.createdAt) ?: it.id }
+    if (sorted.size > total) hasMore.set(true)
+    val recent = sorted.take(total)
+    PagedSlice(
+      items = attachStages(service, recent.map { it.withDisplayTimes() }, limit = 6),
+      truncated = hasMore.get(),
+    )
   }
 
   suspend fun attachJobs(
@@ -577,21 +656,28 @@ class GitLabRepository {
     projectId: Long,
     path: String?,
     ref: String?
-  ): Result<List<GitLabTreeItem>> = call {
+  ): Result<List<GitLabTreeItem>> = getRepositoryTreePage(instance, projectId, path, ref).map { it.items }
+
+  suspend fun getRepositoryTreePage(
+    instance: GitLabInstance,
+    projectId: Long,
+    path: String?,
+    ref: String?
+  ): Result<PagedSlice<GitLabTreeItem>> = call {
     val normalizedPath = path?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }
-    fetchPages(maxPages = 5) { page ->
+    val slice = fetchSlice(maxPages = MAX_TREE_PAGES) { page ->
       service(instance).getRepositoryTree(projectId, path = normalizedPath, ref = ref, perPage = 100, page = page)
-    }.sortedWith(compareBy<GitLabTreeItem> { if (it.type == "tree") 0 else 1 }.thenBy { it.name.lowercase() })
+    }
+    slice.copy(
+      items = slice.items.sortedWith(compareBy<GitLabTreeItem> { if (it.type == "tree") 0 else 1 }.thenBy { it.name.lowercase() }),
+    )
   }
 
   suspend fun getRepositoryCommits(
     instance: GitLabInstance,
     projectId: Long,
     ref: String?
-  ): Result<List<GitLabCommit>> = call {
-    fetchPages(maxPages = 1) { page -> service(instance).getRepositoryCommits(projectId, ref = ref, perPage = 40, page = page) }
-      .map { it.withDisplayTimes() }
-  }
+  ): Result<List<GitLabCommit>> = getCommits(instance, projectId, ref)
 
   suspend fun getFileContent(
     instance: GitLabInstance,
@@ -600,7 +686,11 @@ class GitLabRepository {
     ref: String?
   ): Result<String> = call {
     val response = service(instance).getRawFileContent(projectId, encodeGitLabPath(filePath), ref ?: "HEAD")
-    if (response.code() == 404) throw GitLabApiException(404, "This file isn't on the default branch anymore. Go back and refresh the file list.")
+    if (response.code() == 404) {
+      response.errorBody()?.close()
+      val targetRef = ref?.takeIf { it.isNotBlank() }?.let { "on \"$it\"" } ?: "on the default branch"
+      throw GitLabApiException(404, "This file isn't $targetRef anymore. Go back and refresh the file list.")
+    }
     if (!response.isSuccessful) throw response.toGitLabException()
     decodeBody(response.body())
   }
@@ -609,18 +699,82 @@ class GitLabRepository {
     readReadme(service(instance), projectId, ref)
   }
 
-  suspend fun getTodos(instance: GitLabInstance): Result<List<GitLabTodo>> = call {
-    if (instance.token.isBlank()) return@call emptyList()
+  suspend fun getTodosFeed(
+    instance: GitLabInstance,
+    state: String? = null,
+    action: String? = null,
+    type: String? = null,
+    projectId: Long? = null,
+    authorId: Long? = null,
+  ): Result<ServerFeed<GitLabTodo>> = call {
+    if (instance.token.isBlank()) return@call ServerFeed(emptyList(), null)
     val service = service(instance)
-    coroutineScope {
-      val pending = async { fetchPages(maxPages = 2) { page -> service.getTodos(state = "pending", perPage = 100, page = page) } }
-      val done = async {
-        runCatchingApi { fetchPages(maxPages = 1) { page -> service.getTodos(state = "done", perPage = 30, page = page) } }
-          .getOrDefault(emptyList())
+    if (state != null) {
+      val maxPages = if (state == "pending") 2 else 1
+      val perPage = if (state == "pending") 100 else 30
+      return@call fetchPagesWithServerTime(maxPages = maxPages) { page ->
+        service.getTodos(
+          state = state,
+          action = action,
+          type = type,
+          projectId = projectId,
+          authorId = authorId,
+          perPage = perPage,
+          page = page,
+        )
       }
-      (pending.await() + done.await()).distinctBy { it.id }
+    }
+    coroutineScope {
+      val pending = async {
+        fetchPagesWithServerTime(maxPages = 2) { page ->
+          service.getTodos(
+            state = "pending",
+            action = action,
+            type = type,
+            projectId = projectId,
+            authorId = authorId,
+            perPage = 100,
+            page = page,
+          )
+        }
+      }
+      val done = async {
+        runCatchingApi {
+          fetchPagesWithServerTime(maxPages = 1) { page ->
+            service.getTodos(
+              state = "done",
+              action = action,
+              type = type,
+              projectId = projectId,
+              authorId = authorId,
+              perPage = 30,
+              page = page,
+            )
+          }
+        }.getOrDefault(ServerFeed(emptyList(), null))
+      }
+      val pendingFeed = pending.await()
+      val doneFeed = done.await()
+      val serverTime = listOfNotNull(pendingFeed.serverTimeMs, doneFeed.serverTimeMs).maxOrNull()
+      ServerFeed((pendingFeed.items + doneFeed.items).distinctBy { it.id }, serverTime)
     }
   }
+
+  suspend fun getTodos(
+    instance: GitLabInstance,
+    state: String? = null,
+    action: String? = null,
+    type: String? = null,
+    projectId: Long? = null,
+    authorId: Long? = null,
+  ): Result<List<GitLabTodo>> = getTodosFeed(
+    instance = instance,
+    state = state,
+    action = action,
+    type = type,
+    projectId = projectId,
+    authorId = authorId,
+  ).map { it.items }
 
   suspend fun markTodoDone(instance: GitLabInstance, todoId: Long): Result<Unit> = call {
     requireToken(instance)
@@ -682,8 +836,15 @@ class GitLabRepository {
     val people = response.requireList()
     kotlinx.coroutines.withTimeoutOrNull(5_000) {
       coroutineScope {
-        people.map { person ->
-          async { person.copy(avatarUrl = person.avatarUrl ?: contributorAvatar(instance, person.email)) }
+        people.mapIndexed { index, person ->
+          async {
+            val avatar = if (index < MAX_CONTRIBUTOR_AVATARS) {
+              person.avatarUrl ?: contributorAvatar(instance, person.email)
+            } else {
+              person.avatarUrl
+            }
+            person.copy(avatarUrl = avatar)
+          }
         }.awaitAll()
       }
     } ?: people
@@ -697,27 +858,55 @@ class GitLabRepository {
     service(instance).getProjectEvents(projectId).requireList().map { it.copy(createdAt = formatGitLabTime(it.createdAt)) }
   }
 
-  suspend fun getCommits(instance: GitLabInstance, projectId: Long, ref: String?, path: String? = null): Result<List<GitLabCommit>> = call {
-    fetchPages(maxPages = 1) { page -> service(instance).getRepositoryCommits(projectId, ref = ref, path = path, perPage = 40, page = page) }
-      .map { it.withDisplayTimes() }
+  suspend fun getCommits(instance: GitLabInstance, projectId: Long, ref: String?, path: String? = null): Result<List<GitLabCommit>> =
+    getCommitsPage(instance, projectId, ref, path = path, page = 1).map { it.items }
+
+  suspend fun getCommitsPage(
+    instance: GitLabInstance,
+    projectId: Long,
+    ref: String?,
+    path: String? = null,
+    page: Int = 1,
+  ): Result<ListPage<GitLabCommit>> = call {
+    val response = service(instance).getRepositoryCommits(projectId, ref = ref, path = path, perPage = 40, page = page)
+    if (!response.isSuccessful) throw response.toGitLabException()
+    ListPage(
+      items = response.body().orEmpty().map { it.withDisplayTimes() },
+      nextPage = nextPage(response, page),
+      totalCount = response.headers()["X-Total"]?.toIntOrNull(),
+    )
   }
 
   suspend fun getCommit(instance: GitLabInstance, projectId: Long, sha: String): Result<GitLabCommit> = call {
     service(instance).getCommit(projectId, sha).requireBody().withDisplayTimes()
   }
 
-  suspend fun getCommitDiff(instance: GitLabInstance, projectId: Long, sha: String): Result<List<GitLabFileDiff>> = call {
-    fetchPages(maxPages = 4) { page -> service(instance).getCommitDiff(projectId, sha, page = page) }
+  suspend fun getCommitDiff(instance: GitLabInstance, projectId: Long, sha: String): Result<List<GitLabFileDiff>> =
+    getCommitDiffPage(instance, projectId, sha).map { it.items }
+
+  suspend fun getCommitDiffPage(instance: GitLabInstance, projectId: Long, sha: String): Result<PagedSlice<GitLabFileDiff>> = call {
+    fetchSlice(maxPages = MAX_COMMIT_DIFF_PAGES) { page -> service(instance).getCommitDiff(projectId, sha, page = page) }
   }
 
   // ---------------------------------------------------------------------------------------------
   // Merge request details
   // ---------------------------------------------------------------------------------------------
 
-  suspend fun getMergeRequestDiscussions(instance: GitLabInstance, projectId: Long, iid: Long): Result<List<com.cboyxd.gitlab.data.model.GitLabDiscussion>> = call {
-    fetchPages(maxPages = 100) { page -> service(instance).getMergeRequestDiscussions(projectId, iid, page = page) }
+  suspend fun getMergeRequestDiscussions(instance: GitLabInstance, projectId: Long, iid: Long): Result<List<com.cboyxd.gitlab.data.model.GitLabDiscussion>> =
+    getMergeRequestDiscussionsPage(instance, projectId, iid).map { it.items }
+
+  suspend fun getMergeRequestDiscussionsPage(
+    instance: GitLabInstance,
+    projectId: Long,
+    iid: Long,
+  ): Result<PagedSlice<com.cboyxd.gitlab.data.model.GitLabDiscussion>> = call {
+    val slice = fetchSlice(maxPages = MAX_DISCUSSION_PAGES) { page ->
+      service(instance).getMergeRequestDiscussions(projectId, iid, page = page)
+    }
+    val sorted = slice.items
       .sortedBy { it.notes.firstOrNull()?.createdAt.orEmpty() }
       .map { discussion -> discussion.copy(notes = discussion.notes.sortedBy { it.createdAt }.map { it.withDisplayTimes() }) }
+    slice.copy(items = sorted)
   }
 
   /** Compare the stored commits, so older threads never show unrelated code from the latest revision. */
@@ -1168,36 +1357,73 @@ class GitLabRepository {
       }
       if (buffer.size == 0L) return@use ""
       val truncated = buffer.size > MAX_FILE_BYTES
-      val bytes = if (truncated) buffer.readByteArray(MAX_FILE_BYTES) else buffer.readByteArray()
-      decodeBytes(bytes, truncated)
+      val byteCount = if (truncated) MAX_FILE_BYTES else buffer.size
+      val bytes = buffer.readByteArray(byteCount)
+      decodeFileBytes(bytes, truncated)
     }
   }
 
   private suspend fun <T> fetchPages(
     maxPages: Int,
     request: suspend (page: Int) -> Response<List<T>>
-  ): List<T> {
+  ): List<T> = fetchSlice(maxPages, request).items
+
+  private suspend fun <T> fetchSlice(
+    maxPages: Int,
+    request: suspend (page: Int) -> Response<List<T>>
+  ): PagedSlice<T> {
     val all = mutableListOf<T>()
     var page = 1
-    repeat(maxPages) {
+    var total: Int? = null
+    for (attempt in 0 until maxPages) {
       val response = request(page)
       if (!response.isSuccessful) throw response.toGitLabException()
+      if (total == null) {
+        total = response.headers()["X-Total"]?.toIntOrNull()
+      }
       val chunk = response.body().orEmpty()
       all += chunk
       val next = response.headers()["X-Next-Page"]?.toIntOrNull()
-      if (next == null || next <= page || chunk.isEmpty()) return all
+      if (next == null || next <= page || chunk.isEmpty()) {
+        return PagedSlice(items = all, totalCount = total, truncated = false)
+      }
+      if (attempt == maxPages - 1) {
+        return PagedSlice(items = all, totalCount = total, truncated = true)
+      }
       page = next
     }
-    return all
+    return PagedSlice(items = all, totalCount = total, truncated = false)
   }
 
-  /** Converts expected failures into Result; cancellation always propagates. */
+  private suspend fun <T> fetchPagesWithServerTime(
+    maxPages: Int,
+    request: suspend (page: Int) -> Response<List<T>>
+  ): ServerFeed<T> {
+    val all = mutableListOf<T>()
+    var serverTimeMs: Long? = null
+    var page = 1
+    for (attempt in 0 until maxPages) {
+      val response = request(page)
+      if (!response.isSuccessful) throw response.toGitLabException()
+      response.headers().getDate("Date")?.time?.let { dateMs ->
+        serverTimeMs = maxOf(serverTimeMs ?: Long.MIN_VALUE, dateMs)
+      }
+      val chunk = response.body().orEmpty()
+      all += chunk
+      val next = response.headers()["X-Next-Page"]?.toIntOrNull()
+      if (next == null || next <= page || chunk.isEmpty()) return ServerFeed(all, serverTimeMs)
+      page = next
+    }
+    return ServerFeed(all, serverTimeMs)
+  }
+
+  /** Converts expected failures into Result; cancellation and fatal JVM errors propagate. */
   private suspend fun <T> call(block: suspend () -> T): Result<T> = withContext(Dispatchers.IO) {
     try {
       Result.success(block())
     } catch (cancel: CancellationException) {
       throw cancel
-    } catch (error: Throwable) {
+    } catch (error: Exception) {
       Result.failure(error.toApiException())
     }
   }
@@ -1284,6 +1510,11 @@ class GitLabRepository {
     const val MAX_FILE_BYTES = 400_000L
     const val MAX_TRACE_BYTES = 256_000L
     const val PROJECT_PAGE_SIZE = 50
+    const val MAX_DIFF_PAGES = 5
+    const val MAX_DISCUSSION_PAGES = 5
+    const val MAX_TREE_PAGES = 5
+    const val MAX_COMMIT_DIFF_PAGES = 4
+    const val MAX_CONTRIBUTOR_AVATARS = 15
   }
 }
 
@@ -1322,12 +1553,34 @@ internal fun Throwable.toApiException(): Throwable = when (this) {
   else -> GitLabApiException(-1, message ?: "Something went wrong. Try again.")
 }
 
-private fun decodeBytes(bytes: ByteArray, truncated: Boolean): String {
+internal fun decodeFileBytes(bytes: ByteArray, truncated: Boolean): String {
   if (bytes.isEmpty()) return ""
   val sniff = bytes.size.coerceAtMost(8_000)
   if ((0 until sniff).any { bytes[it] == 0.toByte() }) {
     return "Binary file (${bytes.size} bytes). Open it on the web to view it."
   }
-  val text = String(bytes, Charsets.UTF_8)
+  val safeLength = if (truncated) utf8CompletePrefixLength(bytes) else bytes.size
+  val text = String(bytes, 0, safeLength, Charsets.UTF_8)
+    .replace("\r\n", "\n")
+    .replace('\r', '\n')
   return if (truncated) text + "\n\n… The file is longer than 400 KB. Open it on the web to see the rest." else text
+}
+
+internal fun utf8CompletePrefixLength(bytes: ByteArray): Int {
+  val len = bytes.size
+  if (len == 0) return 0
+  var i = len - 1
+  while (i >= 0 && len - 1 - i < 3 && (bytes[i].toInt() and 0xC0) == 0x80) {
+    i--
+  }
+  if (i < 0) return len
+  val lead = bytes[i].toInt() and 0xFF
+  val expectedLen = when {
+    lead < 0x80 -> 1
+    (lead and 0xE0) == 0xC0 -> 2
+    (lead and 0xF0) == 0xE0 -> 3
+    (lead and 0xF8) == 0xF0 -> 4
+    else -> 1
+  }
+  return if (i + expectedLen > len) i else len
 }

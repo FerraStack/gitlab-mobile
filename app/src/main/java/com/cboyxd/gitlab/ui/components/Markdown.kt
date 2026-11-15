@@ -9,16 +9,20 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -28,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -57,6 +62,7 @@ import com.cboyxd.gitlab.ui.theme.CodeFont
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlColors
 import com.cboyxd.gitlab.ui.theme.GlRadius
+import com.cboyxd.gitlab.ui.theme.GlSpace
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.MarkdownElementTypes
@@ -67,6 +73,7 @@ import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Where relative links and images in a document point. [webBase] is the project's web URL
@@ -101,9 +108,78 @@ data class MdImage(val url: String, val alt: String, val link: String?)
 @Immutable
 data class MdListItem(val marker: String, val checked: Boolean?, val blocks: List<MdBlock>)
 
+internal data class MarkdownCacheKey(
+  val markdown: String,
+  val colors: GlColors,
+  val webBase: String?,
+  val rawBase: String?,
+)
+
+internal class CachedMarkdown(
+  val blocks: List<MdBlock>,
+  val openRef: AtomicReference<(String) -> Unit>,
+)
+
+internal object MarkdownCache {
+  private const val MAX_ENTRIES = 128
+  private const val MAX_TOTAL_CHARS = 2_000_000
+  private var totalChars = 0
+  private val entries = object : LinkedHashMap<MarkdownCacheKey, CachedMarkdown>(64, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<MarkdownCacheKey, CachedMarkdown>): Boolean {
+      val evict = size > MAX_ENTRIES || totalChars > MAX_TOTAL_CHARS
+      if (evict) totalChars = (totalChars - eldest.key.markdown.length).coerceAtLeast(0)
+      return evict
+    }
+  }
+
+  @Synchronized
+  fun get(key: MarkdownCacheKey): CachedMarkdown? = entries[key]
+
+  @Synchronized
+  fun put(key: MarkdownCacheKey, value: CachedMarkdown) {
+    if (key.markdown.length > MAX_TOTAL_CHARS) return
+    val previous = entries.put(key, value)
+    if (previous == null) totalChars += key.markdown.length
+    while (totalChars > MAX_TOTAL_CHARS && entries.size > 1) {
+      val eldestKey = entries.keys.firstOrNull() ?: break
+      if (entries.remove(eldestKey) != null) {
+        totalChars = (totalChars - eldestKey.markdown.length).coerceAtLeast(0)
+      }
+    }
+  }
+
+  fun getOrParse(
+    markdown: String,
+    colors: GlColors,
+    context: MarkdownContext,
+    open: (String) -> Unit,
+  ): CachedMarkdown {
+    val key = MarkdownCacheKey(markdown, colors, context.webBase, context.rawBase)
+    get(key)?.let { cached ->
+      cached.openRef.set(open)
+      return cached
+    }
+    val openRef = AtomicReference(open)
+    val blocks = parseMarkdown(markdown, colors, context) { url -> openRef.get().invoke(url) }
+    val created = CachedMarkdown(blocks, openRef)
+    put(key, created)
+    return created
+  }
+
+  @Synchronized
+  fun clear() {
+    entries.clear()
+    totalChars = 0
+  }
+
+  @Synchronized
+  fun size(): Int = entries.size
+}
+
 /**
  * GitLab Flavored Markdown rendered with the app's type scale and colors. Parsing and
- * highlighting run on a background thread; plain text shows until they finish.
+ * highlighting run on a background thread on cache miss; cached results render synchronously on
+ * re-entry without flashing plain text or jumping scroll offsets.
  */
 @Composable
 fun MarkdownText(
@@ -111,24 +187,46 @@ fun MarkdownText(
   modifier: Modifier = Modifier,
   context: MarkdownContext = MarkdownContext(),
   textStyle: TextStyle = Gl.type.body,
+  lazy: Boolean = false,
+  contentPadding: PaddingValues = PaddingValues(0.dp),
 ) {
   val colors = Gl.colors
   val uriHandler = LocalUriHandler.current
   val open: (String) -> Unit = remember(context, uriHandler) {
     { url -> if (context.onLink?.invoke(url) != true) runCatching { uriHandler.openUri(url) } }
   }
-  val blocks by produceState<List<MdBlock>?>(null, markdown, colors, context.webBase, context.rawBase) {
-    value = withContext(Dispatchers.Default) {
-      runCatching { MarkdownBuilder(colors, context, open).build(markdown) }.getOrNull()
+  val cacheKey = remember(markdown, colors, context.webBase, context.rawBase) {
+    MarkdownCacheKey(markdown, colors, context.webBase, context.rawBase)
+  }
+  val cachedInitial = remember(cacheKey) { MarkdownCache.get(cacheKey) }
+  val resolved by produceState(cachedInitial, cacheKey) {
+    value = MarkdownCache.get(cacheKey) ?: withContext(Dispatchers.Default) {
+      runCatching { MarkdownCache.getOrParse(markdown, colors, context, open) }.getOrNull()
     }
   }
-  val parsed = blocks
+  SideEffect { resolved?.openRef?.set(open) }
+  val parsed = resolved?.blocks
   if (parsed == null) {
-    Text(markdown.take(4_000), style = textStyle, color = colors.textPrimary, modifier = modifier)
+    Text(markdown.take(4_000), style = textStyle, color = colors.textPrimary, modifier = modifier.padding(contentPadding))
     return
   }
-  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-    parsed.forEach { MdBlockView(it, textStyle, context) }
+  if (lazy) {
+    LazyColumn(
+      modifier = modifier,
+      contentPadding = contentPadding,
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      itemsIndexed(parsed, key = { index, _ -> index }, contentType = { _, block -> block::class }) { _, block ->
+        MdBlockView(block, textStyle, context)
+      }
+      item(key = "markdown-bottom", contentType = "spacer") {
+        Spacer(Modifier.height(GlSpace.group).navigationBarsPadding())
+      }
+    }
+  } else {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      parsed.forEach { MdBlockView(it, textStyle, context) }
+    }
   }
 }
 

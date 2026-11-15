@@ -145,14 +145,19 @@ fun MainScreen(viewModel: GitLabViewModel, onExit: () -> Unit) {
 
   LaunchedEffect(viewModel) {
     launch { viewModel.externalLinks.collect { openUrl(context, it) } }
+    var snackbarJob: kotlinx.coroutines.Job? = null
     viewModel.messages.collect { message ->
-      val result = snackbarHostState.showSnackbar(
-        message = message.text,
-        actionLabel = message.actionLabel,
-        withDismissAction = message.isError,
-        duration = if (message.isError || message.action != null) SnackbarDuration.Indefinite else SnackbarDuration.Short,
-      )
-      if (result == SnackbarResult.ActionPerformed) message.action?.invoke()
+      snackbarJob?.cancel()
+      snackbarHostState.currentSnackbarData?.dismiss()
+      snackbarJob = launch {
+        val result = snackbarHostState.showSnackbar(
+          message = message.text,
+          actionLabel = message.actionLabel,
+          withDismissAction = message.isError,
+          duration = if (message.isError) SnackbarDuration.Indefinite else SnackbarDuration.Short,
+        )
+        if (result == SnackbarResult.ActionPerformed) message.action?.invoke()
+      }
     }
   }
 
@@ -386,6 +391,7 @@ private fun Destination(
         state = uiState,
         onRefresh = { viewModel.refreshDashboard(userInitiated = true) },
         onFilterChange = viewModel::setInboxFilter,
+        onTypeFilterChange = viewModel::setInboxTypeFilter,
         onOpen = { notification -> viewModel.openNotification(notification)?.let(browser) },
         onMarkDone = viewModel::markNotificationDone,
         onMarkAllDone = viewModel::markAllNotificationsDone,
@@ -410,31 +416,46 @@ private fun Destination(
         onBack = null,
       )
     }
-    ScreenDestination.IssuesList -> IssuesScreen(
-      issues = uiState.issues,
-      projects = uiState.projects.data,
-      onSelectIssue = viewModel::openIssue,
-      onCreateIssue = viewModel::createIssue,
-      onRetry = { viewModel.refreshDashboard(userInitiated = true) },
-      onBack = back,
-    )
-    ScreenDestination.MergeRequestsList -> MergeRequestsScreen(
-      mergeRequests = uiState.mergeRequests,
-      projects = uiState.projects.data,
-      onSelectMergeRequest = viewModel::openMergeRequest,
-      onCreateMergeRequest = viewModel.review::create,
-      onLoadBranches = viewModel.review::branches,
-      onRetry = { viewModel.refreshDashboard(userInitiated = true) },
-      onBack = back,
-    )
-    ScreenDestination.PipelinesList -> PipelinesScreen(
-      pipelines = uiState.pipelines,
-      refreshing = uiState.refreshing,
-      onRefresh = { viewModel.refreshDashboard(userInitiated = true) },
-      onRetryPipeline = viewModel::retryPipeline,
-      onOpenPipeline = { viewModel.ci.openPipeline(it.projectId, it.id) },
-      onBack = back,
-    )
+    ScreenDestination.IssuesList -> {
+      val baseWebUrl = uiState.activeInstance?.url?.trimEnd('/')?.takeIf { it.isNotBlank() }
+      IssuesScreen(
+        issues = uiState.issues,
+        projects = uiState.projects.data,
+        onSelectIssue = viewModel::openIssue,
+        onCreateIssue = viewModel::createIssue,
+        onRetry = { viewModel.refreshDashboard(userInitiated = true) },
+        onBack = back,
+        truncated = uiState.issuesTruncated,
+        onOpenInBrowser = baseWebUrl?.let { base -> { browser("$base/dashboard/issues") } },
+      )
+    }
+    ScreenDestination.MergeRequestsList -> {
+      val baseWebUrl = uiState.activeInstance?.url?.trimEnd('/')?.takeIf { it.isNotBlank() }
+      MergeRequestsScreen(
+        mergeRequests = uiState.mergeRequests,
+        projects = uiState.projects.data,
+        onSelectMergeRequest = viewModel::openMergeRequest,
+        onCreateMergeRequest = viewModel.review::create,
+        onLoadBranches = viewModel.review::branches,
+        onRetry = { viewModel.refreshDashboard(userInitiated = true) },
+        onBack = back,
+        truncated = uiState.mergeRequestsTruncated,
+        onOpenInBrowser = baseWebUrl?.let { base -> { browser("$base/dashboard/merge_requests") } },
+      )
+    }
+    ScreenDestination.PipelinesList -> {
+      val baseWebUrl = uiState.activeInstance?.url?.trimEnd('/')?.takeIf { it.isNotBlank() }
+      PipelinesScreen(
+        pipelines = uiState.pipelines,
+        refreshing = uiState.refreshing,
+        onRefresh = { viewModel.refreshDashboard(userInitiated = true) },
+        onRetryPipeline = viewModel::retryPipeline,
+        onOpenPipeline = { viewModel.ci.openPipeline(it.projectId, it.id) },
+        onBack = back,
+        truncated = uiState.pipelinesTruncated,
+        onOpenInBrowser = baseWebUrl?.let { base -> { browser(base) } },
+      )
+    }
     ScreenDestination.GroupsList -> GroupsScreen(
       groups = uiState.groups,
       onSelect = { viewModel.navigateTo(ScreenDestination.GroupProjects(it)) },
