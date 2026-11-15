@@ -4,6 +4,7 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import java.util.UUID
 
+@JsonClass(generateAdapter = true)
 data class GitLabInstance(
   val id: String = UUID.randomUUID().toString(),
   val name: String,

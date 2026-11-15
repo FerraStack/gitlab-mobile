@@ -25,6 +25,7 @@ import androidx.activity.viewModels
 import com.cboyxd.gitlab.ui.MainScreen
 import com.cboyxd.gitlab.ui.theme.GitLabTheme
 import com.cboyxd.gitlab.ui.viewmodel.GitLabViewModel
+import com.cboyxd.gitlab.widget.GitLabWidgetProvider
 
 class MainActivity : ComponentActivity() {
 
@@ -107,6 +108,18 @@ class MainActivity : ComponentActivity() {
           url = open.url,
         )
       }
+      setIntent(Intent(this, MainActivity::class.java))
+      return
+    }
+    if (intent?.action == GitLabWidgetProvider.ACTION_OPEN_INBOX) {
+      viewModel.openWidgetInbox()
+      setIntent(Intent(this, MainActivity::class.java))
+      return
+    }
+    if (intent?.action == GitLabWidgetProvider.ACTION_OPEN_PIPELINE) {
+      val projectId = intent.getLongExtra(GitLabWidgetProvider.EXTRA_PROJECT_ID, 0L)
+      val pipelineId = intent.getLongExtra(GitLabWidgetProvider.EXTRA_PIPELINE_ID, 0L)
+      viewModel.openWidgetPipeline(projectId, pipelineId)
       setIntent(Intent(this, MainActivity::class.java))
       return
     }

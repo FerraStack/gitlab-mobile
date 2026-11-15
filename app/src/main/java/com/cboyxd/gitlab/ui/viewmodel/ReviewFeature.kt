@@ -26,6 +26,13 @@ class ReviewFeature internal constructor(
     host.navigateTo(ScreenDestination.MergeRequestDetail(mr.projectId, mr.iid))
   }
 
+  fun openInPane(mr: GitLabMergeRequest) {
+    host.state.update {
+      it.copy(mergeRequestDetail = MergeRequestDetailState(mr.projectId, mr.iid, Loadable<GitLabMergeRequest?>(mr, loaded = true)))
+    }
+    load(mr.projectId, mr.iid)
+  }
+
   /** Loads everything the detail screen shows, in parallel. Keeps a seeded summary if present. */
   internal fun load(projectId: Long, iid: Long) {
     job?.cancel()

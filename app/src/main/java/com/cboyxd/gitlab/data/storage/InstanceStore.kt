@@ -7,7 +7,6 @@ import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
 /**
  * Saved servers, encrypted with an Android Keystore key. Reads are served from memory after the
@@ -19,7 +18,7 @@ class InstanceStore(context: Context) {
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
   private val secretStore = AndroidKeyStoreSecretStore(context, SECRET_PREFS_NAME)
 
-  private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+  private val moshi = Moshi.Builder().build()
   private val listType = Types.newParameterizedType(List::class.java, GitLabInstance::class.java)
   private val adapter = moshi.adapter<List<GitLabInstance>>(listType)
 

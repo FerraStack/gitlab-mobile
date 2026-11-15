@@ -8,4 +8,13 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
     <color name="window_background">#FFFAFAFC</color>
+    <color name="widget_bg">#FFFFFFFF</color>
+    <color name="widget_border">#FFE4E4E7</color>
+    <color name="widget_text_primary">#FF1F1E24</color>
+    <color name="widget_text_secondary">#FF535158</color>
+    <color name="widget_accent">#FF1068BF</color>
+    <color name="widget_accent_bg">#FFE9F3FC</color>
+    <color name="widget_success">#FF217645</color>
+    <color name="widget_danger">#FFC91C00</color>
+    <color name="widget_warning">#FF9E5400</color>
 </resources>

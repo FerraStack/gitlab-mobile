@@ -197,6 +197,7 @@ fun IssueDetailScreen(
   onOpenInBrowser: (String) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  showBack: Boolean = true,
 ) {
   val c = Gl.colors
   val issue = state.issue.data
@@ -227,7 +228,7 @@ fun IssueDetailScreen(
       title = issue?.title ?: "Issue",
       overline = reference,
       showTitle = scrolledPastTitle || issue == null,
-      onBack = onBack,
+      onBack = if (showBack) onBack else null,
     ) {
       DetailBarActions(webUrl = issue?.webUrl, title = issue?.title.orEmpty(), menu = menu)
     }
@@ -434,6 +435,7 @@ fun MergeRequestDetailScreen(
   onRebase: () -> Unit = {},
   /** Starts a thread on a diff line; the callback gets null on success or the error message. */
   onCommentOnLine: (anchor: DiffLineAnchor, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
+  showBack: Boolean = true,
 ) {
   val mr = state.mergeRequest.data
   var page by rememberSaveable { mutableStateOf(MrPage.OVERVIEW) }
@@ -472,6 +474,7 @@ fun MergeRequestDetailScreen(
       onCancelAutoMerge = onCancelAutoMerge,
       onMarkReady = onMarkReady,
       onRebase = onRebase,
+      showBack = showBack,
     )
     MrPage.FILES -> FilesChangedPage(
       state, reference, onRetry, onOpenInBrowser = onOpenInBrowser, onBack = { page = MrPage.OVERVIEW }, modifier = modifier,
@@ -579,6 +582,7 @@ private fun MergeRequestOverview(
   onCancelAutoMerge: () -> Unit = {},
   onMarkReady: () -> Unit = {},
   onRebase: () -> Unit = {},
+  showBack: Boolean = true,
 ) {
   val c = Gl.colors
   val mr = state.mergeRequest.data
@@ -611,7 +615,7 @@ private fun MergeRequestOverview(
       title = mr?.title ?: "Merge request",
       overline = reference,
       showTitle = scrolledPastTitle || mr == null,
-      onBack = onBack,
+      onBack = if (showBack) onBack else null,
     ) {
       DetailBarActions(webUrl = mr?.webUrl, title = mr?.title.orEmpty(), menu = menu)
     }

@@ -12,6 +12,8 @@ import com.cboyxd.gitlab.data.model.GitLabMergeRequest
 import com.cboyxd.gitlab.data.model.GitLabTodo
 import com.cboyxd.gitlab.data.repository.GitLabRepository
 import com.cboyxd.gitlab.data.storage.InstanceStore
+import com.cboyxd.gitlab.widget.GitLabWidgetProvider
+import com.cboyxd.gitlab.widget.WidgetStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -67,10 +69,11 @@ object GitLabNotificationMonitor {
         if (tag.substringBefore(':') !in accounts.map { it.id }) manager.cancel(tag, notification.id)
       }
       var success = true
+      val observedTodos = mutableMapOf<String, Int>()
       val results = accounts.map { account ->
         val delivered = AtomicInteger()
         try {
-          val errors = pollAccount(context, store, notifications, account, delivered)
+          val errors = pollAccount(context, store, notifications, account, delivered, observedTodos)
           if (errors.any { it.retryable }) success = false
           AccountPoll(account.id, account.name, ok = errors.isEmpty(), error = errors.firstOrNull()?.message, delivered = delivered.get())
         } catch (cancel: CancellationException) {
@@ -80,6 +83,13 @@ object GitLabNotificationMonitor {
           AccountPoll(account.id, account.name, ok = false, error = describe(error), delivered = delivered.get())
         }
       }
+      val activeAccounts = store.getInstances().filter { it.token.isNotBlank() }.map { it.id }.toSet()
+      if (activeAccounts.isEmpty()) {
+        WidgetStore.clear(context)
+      } else {
+        WidgetStore.saveAccountTodos(context, activeAccounts, observedTodos)
+      }
+      GitLabWidgetProvider.refreshAll(context)
       log.record(PollRun(started, System.currentTimeMillis() - started, trigger, PollRun.outcomeOf(results), results))
       success
     } finally {
@@ -117,6 +127,7 @@ object GitLabNotificationMonitor {
     saved: NotificationStore,
     account: GitLabInstance,
     delivered: AtomicInteger,
+    observedTodos: MutableMap<String, Int>,
   ): List<FeedError> = coroutineScope {
     val started = System.currentTimeMillis()
     val since = saved.cursor(account.id, "authored")
@@ -133,6 +144,7 @@ object GitLabNotificationMonitor {
     assignedResult.getOrNull()?.let { processMembership(context, saved, delivered, account, "assigned", it, started) }
     reviewResult.getOrNull()?.let { processMembership(context, saved, delivered, account, "review", it, started) }
     todoResult.getOrNull()?.let { list ->
+      observedTodos[account.id] = list.count { it.state == "pending" }
       val todoSince = saved.cursor(account.id, "todos")
       val suppressedAssigned = assignedResult.getOrNull()?.map { mrKey(it) }?.toSet().orEmpty()
       val suppressedReviews = reviewResult.getOrNull()?.map { mrKey(it) }?.toSet().orEmpty()

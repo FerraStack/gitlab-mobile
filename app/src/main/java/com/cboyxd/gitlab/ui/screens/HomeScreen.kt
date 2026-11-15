@@ -52,6 +52,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -61,7 +63,14 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cboyxd.gitlab.data.model.GitLabEvent
+import com.cboyxd.gitlab.data.model.GitLabGroup
+import com.cboyxd.gitlab.data.model.GitLabInstance
+import com.cboyxd.gitlab.data.model.GitLabIssue
+import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabProject
+import com.cboyxd.gitlab.data.model.GitLabUser
 import com.cboyxd.gitlab.ui.components.Avatar
 import com.cboyxd.gitlab.ui.components.CountText
 import com.cboyxd.gitlab.ui.components.EmptyState
@@ -89,10 +98,76 @@ import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
 import com.cboyxd.gitlab.ui.viewmodel.ScreenDestination
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Immutable
+data class HomeUiSlice(
+  val activeInstance: GitLabInstance?,
+  val isSignedIn: Boolean,
+  val sessionExpired: Boolean,
+  val refreshing: Boolean,
+  val currentUser: Loadable<GitLabUser?>,
+  val issues: Loadable<List<GitLabIssue>>,
+  val mergeRequests: Loadable<List<GitLabMergeRequest>>,
+  val pipelines: Loadable<List<GitLabPipeline>>,
+  val projects: Loadable<List<GitLabProject>>,
+  val groups: Loadable<List<GitLabGroup>>,
+  val activity: Loadable<List<GitLabEvent>>,
+)
+
 @Composable
 fun HomeScreen(
   state: GitLabUiState,
+  onRefresh: () -> Unit,
+  onOpenProfile: () -> Unit,
+  onOpenSearch: () -> Unit,
+  onAddServer: () -> Unit,
+  onSignInAgain: () -> Unit,
+  onNavigate: (ScreenDestination) -> Unit,
+  onSwitchTab: (BottomTab) -> Unit,
+  onToggleStar: (Long) -> Unit,
+  modifier: Modifier = Modifier,
+) = HomeScreen(
+  state = remember(
+    state.activeInstance,
+    state.isSignedIn,
+    state.sessionExpired,
+    state.refreshing,
+    state.currentUser,
+    state.issues,
+    state.mergeRequests,
+    state.pipelines,
+    state.projects,
+    state.groups,
+    state.activity,
+  ) {
+    HomeUiSlice(
+      activeInstance = state.activeInstance,
+      isSignedIn = state.isSignedIn,
+      sessionExpired = state.sessionExpired,
+      refreshing = state.refreshing,
+      currentUser = state.currentUser,
+      issues = state.issues,
+      mergeRequests = state.mergeRequests,
+      pipelines = state.pipelines,
+      projects = state.projects,
+      groups = state.groups,
+      activity = state.activity,
+    )
+  },
+  onRefresh = onRefresh,
+  onOpenProfile = onOpenProfile,
+  onOpenSearch = onOpenSearch,
+  onAddServer = onAddServer,
+  onSignInAgain = onSignInAgain,
+  onNavigate = onNavigate,
+  onSwitchTab = onSwitchTab,
+  onToggleStar = onToggleStar,
+  modifier = modifier,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+  state: HomeUiSlice,
   onRefresh: () -> Unit,
   onOpenProfile: () -> Unit,
   onOpenSearch: () -> Unit,
