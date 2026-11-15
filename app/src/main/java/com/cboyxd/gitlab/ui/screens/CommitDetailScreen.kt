@@ -201,7 +201,7 @@ fun CommitDetailScreen(
                   TruncationNotice(
                     message = message,
                     modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
-                    onOpenInBrowser = commit.webUrl.takeIf { it.isNotBlank() }?.let { web -> { onOpenInBrowser(web) } },
+                    onOpenInBrowser = commit.webUrl?.takeIf { it.isNotBlank() }?.let { web -> { onOpenInBrowser(web) } },
                   )
                 }
               }
