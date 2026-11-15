@@ -195,7 +195,8 @@ data class GitLabIssue(
 data class GitLabMilestone(
   val id: Long = 0,
   val title: String = "",
-  val state: String = ""
+  val state: String = "",
+  @Json(name = "due_date") val dueDate: String? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -339,7 +340,8 @@ data class GitLabCommit(
   @Json(name = "web_url") val webUrl: String? = null,
   val stats: GitLabCommitStats? = null,
   @Json(name = "last_pipeline") val lastPipeline: GitLabPipeline? = null,
-  val status: String? = null
+  val status: String? = null,
+  @Json(name = "project_id") val projectId: Long? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -605,6 +607,61 @@ data class GitLabDiffPosition(
 data class GitLabComparison(val diffs: List<GitLabFileDiff> = emptyList())
 
 @JsonClass(generateAdapter = true)
+data class GitLabIssueUpdate(
+  val title: String? = null,
+  val description: String? = null,
+  @Json(name = "assignee_ids") val assigneeIds: List<Long>? = null,
+  @Json(name = "milestone_id") val milestoneId: Long? = null,
+  val labels: String? = null,
+  @Json(name = "add_labels") val addLabels: String? = null,
+  @Json(name = "remove_labels") val removeLabels: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabMergeRequestUpdate(
+  val title: String? = null,
+  val description: String? = null,
+  @Json(name = "assignee_ids") val assigneeIds: List<Long>? = null,
+  @Json(name = "reviewer_ids") val reviewerIds: List<Long>? = null,
+  @Json(name = "milestone_id") val milestoneId: Long? = null,
+  val labels: String? = null,
+  @Json(name = "add_labels") val addLabels: String? = null,
+  @Json(name = "remove_labels") val removeLabels: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabBlobSearchResult(
+  val basename: String = "",
+  val data: String = "",
+  val path: String = "",
+  val filename: String = "",
+  val ref: String = "",
+  val startline: Int = 1,
+  @Json(name = "project_id") val projectId: Long = 0,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabNoteSearchResult(
+  val id: Long = 0,
+  val body: String = "",
+  val author: GitLabUser = GitLabUser(),
+  @Json(name = "created_at") val createdAt: String = "",
+  @Json(name = "noteable_type") val noteableType: String? = null,
+  @Json(name = "noteable_iid") val noteableIid: Long? = null,
+  @Json(name = "project_id") val projectId: Long = 0,
+  val title: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabAwardEmoji(
+  val id: Long = 0,
+  val name: String = "",
+  val user: GitLabUser = GitLabUser(),
+  @Json(name = "awardable_id") val awardableId: Long = 0,
+  @Json(name = "awardable_type") val awardableType: String = "",
+)
+
+@JsonClass(generateAdapter = true)
 data class GitLabSnippetFile(
   val path: String = "",
   @Json(name = "raw_url") val rawUrl: String = "",
@@ -612,7 +669,7 @@ data class GitLabSnippetFile(
 
 @JsonClass(generateAdapter = true)
 data class GitLabSnippet(
-  val id: Long,
+  val id: Long = 0,
   val title: String = "",
   @Json(name = "file_name") val fileName: String = "",
   val description: String? = null,
@@ -671,4 +728,3 @@ data class GitLabEnvironment(
   @Json(name = "updated_at") val updatedAt: String? = null,
   @Json(name = "last_deployment") val lastDeployment: GitLabDeployment? = null,
 )
-

@@ -1,6 +1,8 @@
 package com.cboyxd.gitlab.ui.viewmodel
 
 import com.cboyxd.gitlab.data.model.GitLabApprovals
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
+import com.cboyxd.gitlab.data.model.GitLabBlobSearchResult
 import com.cboyxd.gitlab.data.model.GitLabBranch
 import com.cboyxd.gitlab.data.model.GitLabCiVariable
 import com.cboyxd.gitlab.data.model.GitLabCommit
@@ -9,6 +11,8 @@ import com.cboyxd.gitlab.data.model.GitLabEnvironment
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabLabel
+import com.cboyxd.gitlab.data.model.GitLabMilestone
+import com.cboyxd.gitlab.data.model.GitLabNoteSearchResult
 import com.cboyxd.gitlab.data.model.GitLabRelease
 import com.cboyxd.gitlab.data.model.GitLabSnippet
 import com.cboyxd.gitlab.data.model.GitLabTag
@@ -62,9 +66,9 @@ sealed class ScreenDestination {
   data class GroupProjects(val group: GitLabGroup) : ScreenDestination()
   data class ProjectDetail(val projectId: Long) : ScreenDestination()
   /** Repository browser; path and ref live in [ProjectDetailState]. */
-  data class ProjectCode(val projectId: Long) : ScreenDestination()
+  data class ProjectCode(val projectId: Long, val ref: String? = null, val path: String = "") : ScreenDestination()
   data class ProjectSectionList(val projectId: Long, val section: ProjectSection) : ScreenDestination()
-  data class FileViewer(val projectId: Long, val filePath: String, val ref: String? = null) : ScreenDestination()
+  data class FileViewer(val projectId: Long, val filePath: String, val ref: String? = null, val snippetId: Long? = null) : ScreenDestination()
   data class CommitDetail(val projectId: Long, val sha: String) : ScreenDestination()
   /** The "Run pipeline" form for a project. */
   data class RunPipeline(val projectId: Long) : ScreenDestination()
@@ -73,7 +77,7 @@ sealed class ScreenDestination {
   data class ReleaseDetail(val projectId: Long, val tagName: String) : ScreenDestination()
   /** A person; [userId] 0 means "look up by [username]" (from an @mention). */
   data class UserDetail(val userId: Long, val username: String = "") : ScreenDestination()
-  data object Search : ScreenDestination()
+  data class Search(val projectId: Long? = null, val projectName: String? = null) : ScreenDestination()
   data class IssueDetail(val projectId: Long, val iid: Long) : ScreenDestination()
   data class MergeRequestDetail(val projectId: Long, val iid: Long) : ScreenDestination()
 }
@@ -237,15 +241,23 @@ enum class SearchScope(val title: String) {
   PROJECTS("Projects"),
   ISSUES("Issues"),
   MERGE_REQUESTS("Merge requests"),
+  BLOBS("Code"),
+  COMMITS("Commits"),
+  NOTES("Comments"),
   USERS("People"),
 }
 
 data class SearchState(
   val query: String = "",
   val scope: SearchScope = SearchScope.PROJECTS,
+  val projectId: Long? = null,
+  val projectName: String? = null,
   val projects: Loadable<List<GitLabProject>> = emptyFeed(),
   val issues: Loadable<List<GitLabIssue>> = emptyFeed(),
   val mergeRequests: Loadable<List<GitLabMergeRequest>> = emptyFeed(),
+  val blobs: Loadable<List<GitLabBlobSearchResult>> = emptyFeed(),
+  val commits: Loadable<List<GitLabCommit>> = emptyFeed(),
+  val notes: Loadable<List<GitLabNoteSearchResult>> = emptyFeed(),
   val users: Loadable<List<GitLabUser>> = emptyFeed(),
 )
 
@@ -254,6 +266,8 @@ data class FileState(
   val path: String = "",
   val content: Loadable<String?> = Loadable(null),
   val ref: String? = null,
+  val snippetId: Long? = null,
+  val snippetWebUrl: String? = null,
 )
 
 data class IssueDetailState(
@@ -261,6 +275,10 @@ data class IssueDetailState(
   val iid: Long = 0,
   val issue: Loadable<GitLabIssue?> = Loadable(null),
   val notes: Loadable<List<GitLabNote>> = emptyFeed(),
+  val awardEmojis: List<GitLabAwardEmoji> = emptyList(),
+  val awardEmojisLoaded: Boolean = false,
+  val noteAwardEmojis: Map<Long, List<GitLabAwardEmoji>> = emptyMap(),
+  val togglingReactions: Set<String> = emptySet(),
   val busy: Boolean = false,
   val posting: Boolean = false,
 )
@@ -280,6 +298,10 @@ data class MergeRequestDetailState(
   val commits: Loadable<List<GitLabCommit>> = emptyFeed(),
   val pipelines: Loadable<List<GitLabPipeline>> = emptyFeed(),
   val approvals: Loadable<GitLabApprovals?> = Loadable(null),
+  val awardEmojis: List<GitLabAwardEmoji> = emptyList(),
+  val awardEmojisLoaded: Boolean = false,
+  val noteAwardEmojis: Map<Long, List<GitLabAwardEmoji>> = emptyMap(),
+  val togglingReactions: Set<String> = emptySet(),
   val busy: Boolean = false,
   val posting: Boolean = false,
   /** Threads whose resolve or unresolve request is running. */
@@ -340,6 +362,9 @@ data class GitLabUiState(
   val offlineSnapshotSavedAtMs: Long? = null,
   val recentIssues: List<GitLabIssue> = emptyList(),
   val recentMergeRequests: List<GitLabMergeRequest> = emptyList(),
+  val projectMembers: Map<Long, Loadable<List<GitLabUser>>> = emptyMap(),
+  val projectMilestones: Map<Long, Loadable<List<GitLabMilestone>>> = emptyMap(),
+  val drafts: Map<String, String> = emptyMap(),
 
   val loginState: LoginState = LoginState(),
 ) {

@@ -17,6 +17,8 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
   private var fileJob: Job? = null
   private var commitJob: Job? = null
   private val labelJobs = mutableMapOf<Long, Job>()
+  private val memberJobs = mutableMapOf<Long, Job>()
+  private val milestoneJobs = mutableMapOf<Long, Job>()
   private var stateCountsJob: Job? = null
   private var moreJob: Job? = null
 
@@ -28,6 +30,10 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     sectionJobs.clear()
     labelJobs.values.forEach { it.cancel() }
     labelJobs.clear()
+    memberJobs.values.forEach { it.cancel() }
+    memberJobs.clear()
+    milestoneJobs.values.forEach { it.cancel() }
+    milestoneJobs.clear()
   }
 
   // -------------------------------------------------------------------------------------------
@@ -60,7 +66,10 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
           // couldn't start loading without it; start it now.
           when (val destination = host.state.value.pendingDestination ?: host.state.value.destination) {
             is ScreenDestination.ProjectSectionList -> if (destination.projectId == projectId) loadSection(destination.section)
-            is ScreenDestination.ProjectCode -> if (destination.projectId == projectId) ensureTree()
+            is ScreenDestination.ProjectCode -> if (destination.projectId == projectId) {
+              if (destination.ref != null || destination.path.isNotEmpty()) openCodeDestination(projectId, destination.ref, destination.path)
+              else ensureTree()
+            }
             else -> Unit
           }
         },
@@ -448,6 +457,23 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     if (!d.tree.loaded && !d.tree.loading) openPath(d.treePath)
   }
 
+  internal fun openCodeDestination(projectId: Long, ref: String?, path: String) {
+    val d = detail
+    val project = d.project.data ?: return
+    if (d.projectId != projectId) return
+    val normalizedRef = ref?.takeIf { it.isNotBlank() && it != project.defaultBranch }
+    val refChanged = ref != null && normalizedRef != d.ref
+    if (refChanged) {
+      update(projectId) {
+        it.copy(ref = normalizedRef, treePath = path, tree = emptyFeed(), commits = emptyFeed(), readme = Loadable(null))
+      }
+      loadReadme()
+    } else if (d.treePath != path) {
+      update(projectId) { it.copy(treePath = path, tree = emptyFeed()) }
+    }
+    openPath(path)
+  }
+
   fun openPath(path: String) {
     val d = detail
     val project = d.project.data ?: return
@@ -484,15 +510,44 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       start = { it.copy(file = FileState(projectId, path, Loadable<String?>(null, loading = true), ref)) },
       request = { host.repository.getFileContent(it, projectId, path, ref) },
       finish = { s, r ->
-        if (s.file.projectId != projectId || s.file.path != path) s
+        if (s.file.projectId != projectId || s.file.path != path || s.file.snippetId != null) s
         else s.copy(file = s.file.copy(content = s.file.content.settle(r.map { text -> text as String? })))
       },
     )
   }
 
+  internal fun loadSnippet(projectId: Long, snippetId: Long) {
+    fileJob?.cancel()
+    val fallbackName = "snippet-$snippetId"
+    host.state.update {
+      it.copy(file = FileState(projectId, fallbackName, Loadable<String?>(null, loading = true), snippetId = snippetId))
+    }
+    fileJob = host.session.launch {
+      val meta = host.api { host.repository.getSnippet(it, snippetId = snippetId, projectId = projectId) }.getOrNull()
+      val raw = host.api { host.repository.getSnippetRaw(it, snippetId = snippetId, projectId = projectId) }
+      host.state.update { s ->
+        if (s.file.projectId != projectId || s.file.snippetId != snippetId) s
+        else {
+          val fileName = meta?.fileName?.takeIf { it.isNotBlank() }
+            ?: meta?.title?.takeIf { it.isNotBlank() }
+            ?: s.file.path
+          s.copy(
+            file = s.file.copy(
+              path = fileName,
+              snippetWebUrl = meta?.webUrl?.takeIf { it.isNotBlank() },
+              content = s.file.content.settle(raw.map { text -> text as String? }),
+            )
+          )
+        }
+      }
+    }
+  }
+
   fun retryFile() {
     val f = host.state.value.file
-    if (f.projectId > 0) loadFile(f.projectId, f.path, f.ref)
+    val snippetId = f.snippetId
+    if (snippetId != null) loadSnippet(f.projectId, snippetId)
+    else if (f.projectId > 0) loadFile(f.projectId, f.path, f.ref)
   }
 
   fun openCommit(projectId: Long, sha: String) {
@@ -537,6 +592,44 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
     labelJobs[projectId] = host.session.launch {
       host.api { host.repository.getLabels(it, projectId) }.onSuccess { labels ->
         host.state.update { s -> s.copy(labels = s.labels + (projectId to labels.associateBy { it.name })) }
+      }
+    }
+  }
+
+  /** Project members for assignee and reviewer pickers. */
+  fun ensureMembers(projectId: Long, force: Boolean = false) {
+    if (projectId <= 0) return
+    val current = host.state.value.projectMembers[projectId]
+    if (!force && ((current?.loaded == true && current.error == null) || memberJobs[projectId]?.isActive == true)) return
+    memberJobs[projectId]?.cancel()
+    host.state.update { s ->
+      val prev = s.projectMembers[projectId] ?: emptyFeed()
+      s.copy(projectMembers = s.projectMembers + (projectId to prev.start()))
+    }
+    memberJobs[projectId] = host.session.launch {
+      val r = host.api { host.repository.getProjectMembers(it, projectId) }
+      host.state.update { s ->
+        val prev = s.projectMembers[projectId] ?: emptyFeed()
+        s.copy(projectMembers = s.projectMembers + (projectId to prev.settle(r)))
+      }
+    }
+  }
+
+  /** Active milestones for the milestone picker. */
+  fun ensureMilestones(projectId: Long, force: Boolean = false) {
+    if (projectId <= 0) return
+    val current = host.state.value.projectMilestones[projectId]
+    if (!force && ((current?.loaded == true && current.error == null) || milestoneJobs[projectId]?.isActive == true)) return
+    milestoneJobs[projectId]?.cancel()
+    host.state.update { s ->
+      val prev = s.projectMilestones[projectId] ?: emptyFeed()
+      s.copy(projectMilestones = s.projectMilestones + (projectId to prev.start()))
+    }
+    milestoneJobs[projectId] = host.session.launch {
+      val r = host.api { host.repository.getProjectMilestones(it, projectId) }
+      host.state.update { s ->
+        val prev = s.projectMilestones[projectId] ?: emptyFeed()
+        s.copy(projectMilestones = s.projectMilestones + (projectId to prev.settle(r)))
       }
     }
   }

@@ -11,6 +11,8 @@ import com.cboyxd.gitlab.data.api.requireList
 import com.cboyxd.gitlab.data.api.stagesFromJobs
 import com.cboyxd.gitlab.data.api.toGitLabException
 import com.cboyxd.gitlab.data.model.GitLabApprovals
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
+import com.cboyxd.gitlab.data.model.GitLabBlobSearchResult
 import com.cboyxd.gitlab.data.model.GitLabBranch
 import com.cboyxd.gitlab.data.model.GitLabCiVariable
 import com.cboyxd.gitlab.data.model.GitLabCommit
@@ -24,6 +26,9 @@ import com.cboyxd.gitlab.data.model.diffNotePosition
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabLabel
+import com.cboyxd.gitlab.data.model.GitLabMilestone
+import com.cboyxd.gitlab.data.model.GitLabNamespace
+import com.cboyxd.gitlab.data.model.GitLabNoteSearchResult
 import com.cboyxd.gitlab.data.model.GitLabRelease
 import com.cboyxd.gitlab.data.model.GitLabSnippet
 import com.cboyxd.gitlab.data.model.GitLabTag
@@ -31,7 +36,9 @@ import com.cboyxd.gitlab.data.model.GitLabFileDiff
 import com.cboyxd.gitlab.data.model.GitLabGroup
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabIssue
+import com.cboyxd.gitlab.data.model.GitLabIssueUpdate
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.GitLabMergeRequestUpdate
 import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.data.model.GitLabNote
 import com.cboyxd.gitlab.data.model.GitLabPipeline
@@ -300,6 +307,26 @@ class GitLabRepository {
     requireToken(instance)
     service(instance).updateIssue(issue.projectId, issue.iid, title, description)
       .requireBody().withDisplayTimes()
+  }
+
+  suspend fun triageIssue(
+    instance: GitLabInstance,
+    projectId: Long,
+    issueIid: Long,
+    update: GitLabIssueUpdate,
+  ): Result<GitLabIssue> = call {
+    requireToken(instance)
+    service(instance).triageIssue(projectId, issueIid, update).requireBody().withDisplayTimes()
+  }
+
+  suspend fun updateMergeRequest(
+    instance: GitLabInstance,
+    projectId: Long,
+    mrIid: Long,
+    update: GitLabMergeRequestUpdate,
+  ): Result<GitLabMergeRequest> = call {
+    requireToken(instance)
+    service(instance).updateMergeRequest(projectId, mrIid, update).requireBody().withDisplayTimes()
   }
 
   suspend fun getIssueNotes(instance: GitLabInstance, projectId: Long, issueIid: Long): Result<List<GitLabNote>> = call {
@@ -1122,8 +1149,12 @@ class GitLabRepository {
     service(instance).getUsersByName(username = username).requireList().firstOrNull()
   }
 
-  suspend fun searchUsers(instance: GitLabInstance, query: String): Result<List<GitLabUser>> = call {
-    service(instance).getUsersByName(search = query).requireList()
+  suspend fun searchUsers(instance: GitLabInstance, query: String, projectId: Long? = null): Result<List<GitLabUser>> = call {
+    if (projectId != null) {
+      service(instance).searchProjectUsers(projectId, query).requireList()
+    } else {
+      service(instance).getUsersByName(search = query).requireList()
+    }
   }
 
   suspend fun getUserProjects(instance: GitLabInstance, userId: Long): Result<List<GitLabProject>> = call {
@@ -1146,18 +1177,139 @@ class GitLabRepository {
     service(instance).getGroup(encodeGitLabPath(groupPath)).requireBody()
   }
 
+  suspend fun getNamespace(instance: GitLabInstance, path: String): Result<GitLabNamespace> = call {
+    service(instance).getNamespace(encodeGitLabPath(path)).requireBody()
+  }
+
   suspend fun getSubgroups(instance: GitLabInstance, groupPath: String): Result<List<GitLabGroup>> = call {
     fetchPages(maxPages = 1) { page -> service(instance).getSubgroups(encodeGitLabPath(groupPath), page = page) }
   }
 
-  suspend fun searchIssues(instance: GitLabInstance, query: String): Result<List<GitLabIssue>> = call {
-    requireToken(instance)
-    service(instance).searchIssues(query).requireList().map { it.withDisplayTimes() }
+  suspend fun getProjectMembers(instance: GitLabInstance, projectId: Long, query: String? = null): Result<List<GitLabUser>> = call {
+    fetchPages(maxPages = 2) { page ->
+      service(instance).getProjectMembers(projectId, query = query?.takeIf { it.isNotBlank() }, page = page)
+    }.distinctBy { it.id }
   }
 
-  suspend fun searchMergeRequests(instance: GitLabInstance, query: String): Result<List<GitLabMergeRequest>> = call {
+  suspend fun getProjectMilestones(instance: GitLabInstance, projectId: Long): Result<List<GitLabMilestone>> = call {
+    fetchPages(maxPages = 2) { page ->
+      service(instance).getProjectMilestones(projectId, page = page)
+    }
+  }
+
+  suspend fun searchIssues(instance: GitLabInstance, query: String, projectId: Long? = null): Result<List<GitLabIssue>> = call {
+    if (projectId != null) {
+      service(instance).searchProjectIssues(projectId, query).requireList().map { it.withDisplayTimes() }
+    } else {
+      requireToken(instance)
+      service(instance).searchIssues(query).requireList().map { it.withDisplayTimes() }
+    }
+  }
+
+  suspend fun searchMergeRequests(instance: GitLabInstance, query: String, projectId: Long? = null): Result<List<GitLabMergeRequest>> = call {
+    if (projectId != null) {
+      service(instance).searchProjectMergeRequests(projectId, query).requireList().map { it.withDisplayTimes() }
+    } else {
+      requireToken(instance)
+      service(instance).searchMergeRequests(query).requireList().map { it.withDisplayTimes() }
+    }
+  }
+
+  suspend fun searchBlobs(instance: GitLabInstance, query: String, projectId: Long? = null): Result<List<GitLabBlobSearchResult>> = call {
+    if (projectId != null) {
+      service(instance).searchProjectBlobs(projectId, query).requireList()
+    } else {
+      requireToken(instance)
+      service(instance).searchBlobs(query).requireList()
+    }
+  }
+
+  suspend fun searchCommits(instance: GitLabInstance, query: String, projectId: Long? = null): Result<List<GitLabCommit>> = call {
+    val items = if (projectId != null) {
+      service(instance).searchProjectCommits(projectId, query).requireList()
+    } else {
+      requireToken(instance)
+      service(instance).searchCommits(query).requireList()
+    }
+    items.map { c -> c.copy(projectId = c.projectId ?: projectId).withDisplayTimes() }
+  }
+
+  suspend fun searchNotes(instance: GitLabInstance, query: String, projectId: Long? = null): Result<List<GitLabNoteSearchResult>> = call {
+    val items = if (projectId != null) {
+      service(instance).searchProjectNotes(projectId, query).requireList()
+    } else {
+      requireToken(instance)
+      service(instance).searchNotes(query).requireList()
+    }
+    items.map { n ->
+      n.copy(
+        projectId = if (n.projectId > 0) n.projectId else (projectId ?: 0L),
+        createdAt = formatGitLabTime(n.createdAt),
+      )
+    }
+  }
+
+  suspend fun getIssueAwardEmojis(instance: GitLabInstance, projectId: Long, issueIid: Long): Result<List<GitLabAwardEmoji>> = call {
+    service(instance).getIssueAwardEmojis(projectId, issueIid).requireList()
+  }
+
+  suspend fun addIssueAwardEmoji(instance: GitLabInstance, projectId: Long, issueIid: Long, name: String): Result<GitLabAwardEmoji> = call {
     requireToken(instance)
-    service(instance).searchMergeRequests(query).requireList().map { it.withDisplayTimes() }
+    service(instance).addIssueAwardEmoji(projectId, issueIid, name).requireBody()
+  }
+
+  suspend fun deleteIssueAwardEmoji(instance: GitLabInstance, projectId: Long, issueIid: Long, awardId: Long): Result<Unit> = call {
+    requireToken(instance)
+    deleteAward { service(instance).deleteIssueAwardEmoji(projectId, issueIid, awardId) }
+  }
+
+  suspend fun getMergeRequestAwardEmojis(instance: GitLabInstance, projectId: Long, mrIid: Long): Result<List<GitLabAwardEmoji>> = call {
+    service(instance).getMergeRequestAwardEmojis(projectId, mrIid).requireList()
+  }
+
+  suspend fun addMergeRequestAwardEmoji(instance: GitLabInstance, projectId: Long, mrIid: Long, name: String): Result<GitLabAwardEmoji> = call {
+    requireToken(instance)
+    service(instance).addMergeRequestAwardEmoji(projectId, mrIid, name).requireBody()
+  }
+
+  suspend fun deleteMergeRequestAwardEmoji(instance: GitLabInstance, projectId: Long, mrIid: Long, awardId: Long): Result<Unit> = call {
+    requireToken(instance)
+    deleteAward { service(instance).deleteMergeRequestAwardEmoji(projectId, mrIid, awardId) }
+  }
+
+  suspend fun getIssueNoteAwardEmojis(instance: GitLabInstance, projectId: Long, issueIid: Long, noteId: Long): Result<List<GitLabAwardEmoji>> = call {
+    service(instance).getIssueNoteAwardEmojis(projectId, issueIid, noteId).requireList()
+  }
+
+  suspend fun addIssueNoteAwardEmoji(instance: GitLabInstance, projectId: Long, issueIid: Long, noteId: Long, name: String): Result<GitLabAwardEmoji> = call {
+    requireToken(instance)
+    service(instance).addIssueNoteAwardEmoji(projectId, issueIid, noteId, name).requireBody()
+  }
+
+  suspend fun deleteIssueNoteAwardEmoji(instance: GitLabInstance, projectId: Long, issueIid: Long, noteId: Long, awardId: Long): Result<Unit> = call {
+    requireToken(instance)
+    deleteAward { service(instance).deleteIssueNoteAwardEmoji(projectId, issueIid, noteId, awardId) }
+  }
+
+  suspend fun getMergeRequestNoteAwardEmojis(instance: GitLabInstance, projectId: Long, mrIid: Long, noteId: Long): Result<List<GitLabAwardEmoji>> = call {
+    service(instance).getMergeRequestNoteAwardEmojis(projectId, mrIid, noteId).requireList()
+  }
+
+  suspend fun addMergeRequestNoteAwardEmoji(instance: GitLabInstance, projectId: Long, mrIid: Long, noteId: Long, name: String): Result<GitLabAwardEmoji> = call {
+    requireToken(instance)
+    service(instance).addMergeRequestNoteAwardEmoji(projectId, mrIid, noteId, name).requireBody()
+  }
+
+  suspend fun deleteMergeRequestNoteAwardEmoji(instance: GitLabInstance, projectId: Long, mrIid: Long, noteId: Long, awardId: Long): Result<Unit> = call {
+    requireToken(instance)
+    deleteAward { service(instance).deleteMergeRequestNoteAwardEmoji(projectId, mrIid, noteId, awardId) }
+  }
+
+  private suspend fun deleteAward(request: suspend () -> Response<ResponseBody>) {
+    val response = request()
+    if (!response.isSuccessful && response.code() != 404) throw response.toGitLabException()
+    response.body()?.close()
+    response.errorBody()?.close()
   }
 
   private suspend fun versionOrBlank(service: GitLabApiService): String = try {
@@ -1378,7 +1530,7 @@ class GitLabRepository {
     projectId: Long? = null,
   ): Result<GitLabSnippet> = call {
     val api = service(instance)
-    val response = if (projectId != null) {
+    val response = if (projectId != null && projectId > 0L) {
       api.getProjectSnippet(projectId, snippetId)
     } else {
       api.getSnippet(snippetId)
@@ -1392,7 +1544,7 @@ class GitLabRepository {
     projectId: Long? = null,
   ): Result<String> = call {
     val api = service(instance)
-    val response = if (projectId != null) {
+    val response = if (projectId != null && projectId > 0L) {
       api.getProjectSnippetRaw(projectId, snippetId)
     } else {
       api.getSnippetRaw(snippetId)

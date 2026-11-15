@@ -96,6 +96,7 @@ import com.cboyxd.gitlab.ui.screens.RunPipelineScreen
 import com.cboyxd.gitlab.ui.screens.StorageErrorState
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.ProjectSection
+import com.cboyxd.gitlab.ui.viewmodel.emptyFeed
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.ui.components.MarkdownContext
 import com.cboyxd.gitlab.ui.screens.UserDetailScreen
@@ -397,7 +398,7 @@ private fun Destination(
         state = uiState,
         onRefresh = { viewModel.refreshDashboard(userInitiated = true) },
         onOpenProfile = { if (uiState.isSignedIn) viewModel.navigateTo(ScreenDestination.UserProfile) else openServers(true) },
-        onOpenSearch = { viewModel.navigateTo(ScreenDestination.Search) },
+        onOpenSearch = { viewModel.explore.openSearch() },
         onAddServer = { openServers(true) },
         onSignInAgain = { openServers(true) },
         onNavigate = viewModel::navigateTo,
@@ -487,7 +488,7 @@ private fun Destination(
       onOpenProject = { viewModel.navigateTo(ScreenDestination.ProjectDetail(it)) },
       onOpenInBrowser = browser,
     )
-    ScreenDestination.Search -> SearchScreen(
+    is ScreenDestination.Search -> SearchScreen(
       state = uiState.search,
       isSignedIn = uiState.isSignedIn,
       onBack = back,
@@ -497,6 +498,30 @@ private fun Destination(
       onOpenIssue = viewModel::openIssue,
       onOpenMergeRequest = viewModel::openMergeRequest,
       onOpenUser = viewModel.explore::openUser,
+      onOpenBlob = { blob ->
+        if (blob.projectId > 0L && blob.path.isNotBlank()) {
+          viewModel.navigateTo(
+            ScreenDestination.FileViewer(
+              projectId = blob.projectId,
+              filePath = blob.path,
+              ref = blob.ref.takeIf { it.isNotBlank() },
+            )
+          )
+        }
+      },
+      onOpenCommit = { commit ->
+        val pid = commit.projectId ?: uiState.search.projectId ?: 0L
+        if (pid > 0L) viewModel.code.openCommit(pid, commit.id)
+      },
+      onOpenNote = { note ->
+        val iid = note.noteableIid
+        if (note.projectId > 0L && iid != null) {
+          when (note.noteableType) {
+            "Issue" -> viewModel.navigateTo(ScreenDestination.IssueDetail(note.projectId, iid))
+            "MergeRequest" -> viewModel.navigateTo(ScreenDestination.MergeRequestDetail(note.projectId, iid))
+          }
+        }
+      },
     )
     ScreenDestination.UserProfile -> UserProfileScreen(
       activeInstance = uiState.activeInstance,
@@ -575,6 +600,7 @@ private fun Destination(
       onFilterRefs = viewModel.code::filterRefs,
       onRefresh = viewModel.code::refresh,
       onOpenSnippets = { viewModel.snippet.openList(project.projectId) },
+      onOpenSearch = { viewModel.explore.openSearch(project.projectId, project.project.data?.name) },
     )
     is ScreenDestination.ProjectCode -> ProjectCodeScreen(
       state = project,
@@ -648,6 +674,21 @@ private fun Destination(
       onOpenUser = viewModel.explore::openUser,
       onOpenInBrowser = browser,
       onBack = back,
+      currentUsername = (uiState.currentUser.data?.username ?: uiState.activeInstance?.username)?.takeIf { it.isNotBlank() },
+      currentUserId = uiState.currentUser.data?.id ?: 0L,
+      drafts = uiState.drafts,
+      onDraftChange = viewModel::setDraft,
+      onClearDraft = viewModel::clearDraft,
+      onToggleReaction = viewModel::toggleIssueReaction,
+      onToggleNoteReaction = viewModel::toggleIssueNoteReaction,
+      projectMembers = uiState.projectMembers[uiState.issueDetail.projectId] ?: emptyFeed(),
+      projectMilestones = uiState.projectMilestones[uiState.issueDetail.projectId] ?: emptyFeed(),
+      onLoadTriageData = {
+        val pid = uiState.issueDetail.projectId
+        viewModel.code.ensureMembers(pid)
+        viewModel.code.ensureMilestones(pid)
+      },
+      onTriage = viewModel::triageIssue,
     )
     is ScreenDestination.MergeRequestDetail -> MergeRequestDetailScreen(
       state = uiState.mergeRequestDetail,
@@ -667,10 +708,24 @@ private fun Destination(
       onOpenInBrowser = browser,
       onBack = back,
       currentUsername = (uiState.currentUser.data?.username ?: uiState.activeInstance?.username)?.takeIf { it.isNotBlank() },
+      currentUserId = uiState.currentUser.data?.id ?: 0L,
       onSetApproved = viewModel.review::setApproved,
       onCancelAutoMerge = viewModel.review::cancelAutoMerge,
       onMarkReady = viewModel.review::markReady,
       onRebase = viewModel.review::rebase,
+      drafts = uiState.drafts,
+      onDraftChange = viewModel::setDraft,
+      onClearDraft = viewModel::clearDraft,
+      onToggleReaction = viewModel.review::toggleReaction,
+      onToggleNoteReaction = viewModel.review::toggleNoteReaction,
+      projectMembers = uiState.projectMembers[uiState.mergeRequestDetail.projectId] ?: emptyFeed(),
+      projectMilestones = uiState.projectMilestones[uiState.mergeRequestDetail.projectId] ?: emptyFeed(),
+      onLoadTriageData = {
+        val pid = uiState.mergeRequestDetail.projectId
+        viewModel.code.ensureMembers(pid)
+        viewModel.code.ensureMilestones(pid)
+      },
+      onUpdate = viewModel.review::updateMergeRequest,
     )
     is ScreenDestination.RunPipeline -> RunPipelineScreen(
       projectPath = project.project.data?.pathWithNamespace,

@@ -16,6 +16,7 @@ import okhttp3.Dispatcher
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response as OkHttpResponse
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -166,10 +167,19 @@ object GitLabApiClient {
       try {
         val response = chain.proceed(request)
         if (response.code in setOf(500, 502, 503, 504)) {
+          val contentType = response.body?.contentType()
+          val errorBytes = try {
+            response.body?.bytes() ?: ByteArray(0)
+          } catch (_: IOException) {
+            ByteArray(0)
+          }
+          response.close()
           tryCachedResponse()?.let { cached ->
-            response.close()
             return@Interceptor cached
           }
+          return@Interceptor response.newBuilder()
+            .body(errorBytes.toResponseBody(contentType))
+            .build()
         }
         response
       } catch (e: IOException) {

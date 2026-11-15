@@ -44,6 +44,7 @@ import androidx.compose.material.icons.outlined.MergeType
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayCircleOutline
 import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Shield
@@ -138,6 +139,7 @@ fun ProjectDetailScreen(
   onFilterRefs: (String) -> Unit = {},
   onRefresh: () -> Unit = onRetry,
   onOpenSnippets: () -> Unit = {},
+  onOpenSearch: (() -> Unit)? = null,
 ) {
   val project = state.project.data
   val context = LocalContext.current
@@ -156,6 +158,9 @@ fun ProjectDetailScreen(
       background = if (collapsed || project == null) c.bg else c.sunken,
       onBack = onBack,
       actions = {
+        if (onOpenSearch != null && project != null) {
+          GlIconAction(Icons.Outlined.Search, "Search project", onClick = onOpenSearch)
+        }
         val web = project?.webUrl
         if (!web.isNullOrBlank()) {
           GlIconAction(Icons.Outlined.Share, "Share", onClick = { shareUrl(context, project.name, web) })
