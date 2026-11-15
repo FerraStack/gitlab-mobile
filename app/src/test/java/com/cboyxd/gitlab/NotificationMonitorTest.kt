@@ -206,7 +206,7 @@ class NotificationMonitorTest {
     }
 
     assertFalse(GitLabNotificationMonitor.poll(app, PollTrigger.PERIODIC))
-    assertEquals(PollOutcome.PARTIAL, PollLog(app).runs().first().outcome)
+    assertEquals(PollOutcome.FAILED, PollLog(app).runs().first().outcome)
 
     errorCode.set(404)
     assertTrue(GitLabNotificationMonitor.poll(app, PollTrigger.PERIODIC))

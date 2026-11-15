@@ -73,7 +73,7 @@ class GitLabViewModelTest {
       override fun dispatch(request: RecordedRequest): MockResponse {
         val url = request.requestUrl!!
         val path = url.encodedPath
-        val auth = request.getHeader("Authorization").orEmpty()
+        val auth = request.getHeader("PRIVATE-TOKEN") ?: request.getHeader("Authorization").orEmpty()
         return when {
           path.endsWith("/api/v4/user") -> json("""{"id":1,"username":"dev","name":"Dev User"}""")
           path.endsWith("/api/v4/user/status") -> json("""{"message":"Focused"}""")
@@ -195,6 +195,7 @@ class GitLabViewModelTest {
 
   private fun createBootstrappedViewModel(): GitLabViewModel {
     val vm = GitLabViewModel(app)
+    vm.todoUndoDelayMs = 0L
     awaitUntil {
       val s = vm.uiState.value
       s.bootstrapped && !s.refreshing && s.notifications.loaded && s.projects.loaded
@@ -269,10 +270,13 @@ class GitLabViewModelTest {
     assertEquals(2, vm.uiState.value.unreadCount)
     assertEquals(2, WidgetStore.read(app).todoCount)
 
-    // Failure on single mark-done updates optimistically, then rolls back on HTTP 500.
+    // Failure on single mark-done updates optimistically, emits Undo snackbar, then rolls back on HTTP 500.
     failTodoActions.set(true)
     vm.markNotificationDone("101")
-    val errorMsg = runBlocking { kotlinx.coroutines.withTimeout(5_000L) { vm.messages.first() } }
+    val undoMsg = runBlocking { kotlinx.coroutines.withTimeout(5_000L) { vm.messages.first() } }
+    assertFalse(undoMsg.isError)
+    assertEquals("Marked as done", undoMsg.text)
+    val errorMsg = runBlocking { kotlinx.coroutines.withTimeout(5_000L) { vm.messages.first { it.isError } } }
     assertTrue(errorMsg.isError)
     assertTrue(vm.uiState.value.notifications.data.first { it.id == "101" }.isUnread)
     assertEquals(2, vm.uiState.value.unreadCount)
@@ -295,7 +299,10 @@ class GitLabViewModelTest {
     failTodoActions.set(true)
     vm.markAllNotificationsDone()
 
-    val errorMsg = runBlocking { kotlinx.coroutines.withTimeout(5_000L) { vm.messages.first() } }
+    val undoMsg = runBlocking { kotlinx.coroutines.withTimeout(5_000L) { vm.messages.first() } }
+    assertFalse(undoMsg.isError)
+    assertEquals("All to-dos marked as done", undoMsg.text)
+    val errorMsg = runBlocking { kotlinx.coroutines.withTimeout(5_000L) { vm.messages.first { it.isError } } }
     assertTrue(errorMsg.isError)
     assertEquals(2, vm.uiState.value.unreadCount)
     assertEquals(2, WidgetStore.read(app).todoCount)

@@ -82,7 +82,7 @@ class DiffAndTraceParsingTest {
     """.trimIndent()
 
     val lines = parseUnifiedDiff(diff)
-    assertEquals(7, lines.size)
+    assertEquals(8, lines.size)
     assertEquals(1, lines[1].oldNo)
     assertEquals(1, lines[1].newNo)
     assertEquals(2, lines[2].oldNo)

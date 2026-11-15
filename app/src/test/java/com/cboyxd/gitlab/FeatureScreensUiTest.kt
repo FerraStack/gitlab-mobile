@@ -79,7 +79,7 @@ class FeatureScreensUiTest {
   )
 
   @Test
-  fun `InboxScreen shows sign-in prompt to guests and handles filter, mark-done, and mark-all`() {
+  fun `InboxScreen shows sign-in prompt to guests`() {
     var signInClicks = 0
     rule.setContent {
       GitLabTheme(darkTheme = false, reducedMotion = true) {
@@ -97,7 +97,10 @@ class FeatureScreensUiTest {
     rule.onNodeWithText("Sign in to see your inbox").assertIsDisplayed()
     rule.onNodeWithText("Sign in").performClick()
     assertEquals(1, signInClicks)
+  }
 
+  @Test
+  fun `InboxScreen handles filter, mark-done, and mark-all when signed in`() {
     val selectedFilters = mutableListOf<InboxFilter>()
     val doneIds = mutableListOf<String>()
     var markAllCount = 0
@@ -156,8 +159,7 @@ class FeatureScreensUiTest {
   }
 
   @Test
-  fun `PipelineDetailScreen shows running indicator, stage headers, retry on failed, and cancel dialog`() {
-    var retried = 0
+  fun `PipelineDetailScreen shows running indicator, stage headers, and cancel dialog`() {
     var canceled = 0
     val openedJobs = mutableListOf<Long>()
     val playedJobs = mutableListOf<Long>()
@@ -180,7 +182,7 @@ class FeatureScreensUiTest {
           canWrite = true,
           onBack = {},
           onRetryLoad = {},
-          onRetryPipeline = { retried++ },
+          onRetryPipeline = {},
           onCancel = { canceled++ },
           onOpenJob = { openedJobs += it.id },
           onOpenCommit = {},
@@ -204,7 +206,11 @@ class FeatureScreensUiTest {
     rule.onNodeWithText("Cancel pipeline #50?").assertIsDisplayed()
     rule.onNodeWithText("Cancel pipeline").performClick()
     assertEquals(1, canceled)
+  }
 
+  @Test
+  fun `PipelineDetailScreen shows retry action on failed pipeline`() {
+    var retried = 0
     rule.setContent {
       GitLabTheme(darkTheme = false, reducedMotion = true) {
         PipelineDetailScreen(
@@ -276,9 +282,8 @@ class FeatureScreensUiTest {
   }
 
   @Test
-  fun `SearchScreen handles short queries, guest issue lock, scope change, and project click`() {
+  fun `SearchScreen handles short queries and scope change`() {
     val scopes = mutableListOf<SearchScope>()
-    val openedProjects = mutableListOf<Long>()
 
     rule.setContent {
       GitLabTheme(darkTheme = true, reducedMotion = true) {
@@ -288,7 +293,7 @@ class FeatureScreensUiTest {
           onBack = {},
           onQueryChange = {},
           onScopeChange = { scopes += it },
-          onOpenProject = { openedProjects += it },
+          onOpenProject = {},
           onOpenIssue = {},
           onOpenMergeRequest = {},
           onOpenUser = {},
@@ -299,7 +304,10 @@ class FeatureScreensUiTest {
 
     rule.onNodeWithText("Issues").performClick()
     assertEquals(listOf(SearchScope.ISSUES), scopes)
+  }
 
+  @Test
+  fun `SearchScreen shows guest sign-in lock for issues scope`() {
     rule.setContent {
       GitLabTheme(darkTheme = true, reducedMotion = true) {
         SearchScreen(
@@ -316,7 +324,11 @@ class FeatureScreensUiTest {
       }
     }
     rule.onNodeWithText("Sign in to search issues").assertIsDisplayed()
+  }
 
+  @Test
+  fun `SearchScreen opens clicked project from results`() {
+    val openedProjects = mutableListOf<Long>()
     rule.setContent {
       GitLabTheme(darkTheme = false, reducedMotion = true) {
         SearchScreen(

@@ -1,5 +1,7 @@
 package com.cboyxd.gitlab
 
+import android.Manifest
+import android.app.Application
 import android.app.NotificationManager
 import android.content.Context
 import android.view.View
@@ -32,6 +34,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 
@@ -47,7 +50,9 @@ class WidgetTest {
 
   @Before
   fun setUp() {
-    context = ApplicationProvider.getApplicationContext()
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    context = app
     WidgetStore.clear(context)
     PollLog(context).clear()
     context.getSharedPreferences("gitlab_notification_state", Context.MODE_PRIVATE).edit().clear().commit()

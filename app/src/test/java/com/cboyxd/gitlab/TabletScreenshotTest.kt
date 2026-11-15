@@ -84,6 +84,7 @@ class TabletScreenshotTest {
   @Before
   fun setUp() {
     app = ApplicationProvider.getApplicationContext()
+    InstanceStore.get(app).resetAll()
     val cert = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
     val certs = HandshakeCertificates.Builder()
       .heldCertificate(cert)
@@ -96,7 +97,7 @@ class TabletScreenshotTest {
         val path = request.requestUrl?.encodedPath.orEmpty()
         val body = when {
           path == "/api/v4/user" -> """{"id":1,"username":"tanuki","name":"Tanuki Tester"}"""
-          path == "/api/v4/user_status" -> "{}"
+          path == "/api/v4/user_status" || path == "/api/v4/user/status" -> "{}"
           path == "/api/v4/version" -> """{"version":"17.8.0"}"""
           path == "/api/v4/projects" -> """[{"id":1,"name":"rocket","name_with_namespace":"Example Org / rocket","path_with_namespace":"example-org/rocket","default_branch":"main","visibility":"public","web_url":"https://gitlab.com/example-org/rocket"}]"""
           path == "/api/v4/issues" -> """[{"id":107,"iid":7,"project_id":1,"title":"Launch button does nothing on tablets","description":"Steps to reproduce","state":"opened","created_at":"2026-11-10T10:00:00Z","updated_at":"2026-11-10T10:00:00Z","author":{"id":1,"username":"tanuki","name":"Tanuki Tester"},"labels":["bug"],"user_notes_count":1,"web_url":"https://gitlab.com/example-org/rocket/-/issues/7","references":{"short":"#7","full":"example-org/rocket#7"}}]"""
@@ -119,6 +120,7 @@ class TabletScreenshotTest {
     GitLabApiClient.clientOverride = null
     GitLabApiClient.clearCache()
     server.shutdown()
+    InstanceStore.get(app).resetAll()
   }
 
   private fun capture(name: String, dark: Boolean, content: @Composable () -> Unit) {

@@ -210,6 +210,16 @@ class FeatureLogicTest {
     assertTrue("Expected >= $expected calls, got ${calls.get()}", calls.get() >= expected)
   }
 
+  private suspend fun TestScope.awaitCondition(description: String = "condition", predicate: () -> Boolean) {
+    val deadline = System.currentTimeMillis() + 5_000L
+    while (!predicate() && System.currentTimeMillis() < deadline) {
+      runCurrent()
+      withContext(Dispatchers.IO) { Thread.sleep(10) }
+    }
+    runCurrent()
+    assertTrue("Timed out waiting for $description", predicate())
+  }
+
   private fun sampleMr(draft: Boolean = true) = GitLabMergeRequest(
     id = 212,
     iid = 12,
@@ -238,78 +248,81 @@ class FeatureLogicTest {
 
     review.openInPane(sampleMr())
     assertTrue(h.navigated.isEmpty())
-    awaitCalls(h.completedCalls, 6)
+    awaitCondition("openInPane loads all 6 MR sections") {
+      val d = h.state.value.mergeRequestDetail
+      d.mergeRequest.loaded && !d.mergeRequest.loading &&
+        d.diffs.loaded && !d.diffs.loading &&
+        d.discussions.loaded && !d.discussions.loading &&
+        d.commits.loaded && !d.commits.loading &&
+        d.pipelines.loaded && !d.pipelines.loading &&
+        d.approvals.loaded && !d.approvals.loading
+    }
 
     // markReady drops Draft prefix
     review.markReady()
-    awaitCalls(h.completedCalls, 7)
+    awaitCondition("markReady") { !h.state.value.mergeRequestDetail.busy && h.messages.contains("!12 is ready") }
     assertEquals("Fix launch", h.state.value.mergeRequestDetail.mergeRequest.data?.title)
-    assertTrue(h.messages.contains("!12 is ready"))
 
     // cancelAutoMerge clears mergeWhenPipelineSucceeds
     review.cancelAutoMerge()
-    awaitCalls(h.completedCalls, 8)
+    awaitCondition("cancelAutoMerge") { !h.state.value.mergeRequestDetail.busy && h.messages.contains("Auto-merge canceled") }
     assertEquals(false, h.state.value.mergeRequestDetail.mergeRequest.data?.mergeWhenPipelineSucceeds)
-    assertTrue(h.messages.contains("Auto-merge canceled"))
 
     // setApproved(true) & (false)
     review.setApproved(true)
-    awaitCalls(h.completedCalls, 11)
+    awaitCondition("setApproved(true)") { !h.state.value.mergeRequestDetail.busy && h.messages.contains("Approved !12") }
     assertEquals(true, h.state.value.mergeRequestDetail.approvals.data?.approved)
-    assertTrue(h.messages.contains("Approved !12"))
 
     review.setApproved(false)
-    awaitCalls(h.completedCalls, 14)
-    assertTrue(h.messages.contains("Approval revoked"))
+    awaitCondition("setApproved(false)") { !h.state.value.mergeRequestDetail.busy && h.messages.contains("Approval revoked") }
 
     // postNote, commentOnLine, reply, setResolved
     var noteResult: String? = "unset"
     review.postNote("LGTM") { noteResult = it }
-    awaitCalls(h.completedCalls, 15)
+    awaitCondition("postNote") { noteResult != "unset" }
     assertNull(noteResult)
     assertEquals(1, h.state.value.mergeRequestDetail.notes.data.size)
 
     var diffCommentResult: String? = "unset"
     review.commentOnLine(DiffLineAnchor("a.kt", "a.kt", null, 5), "Inline") { diffCommentResult = it }
-    awaitCalls(h.completedCalls, 16)
+    awaitCondition("commentOnLine") { diffCommentResult != "unset" }
     assertNull(diffCommentResult)
     assertTrue(h.state.value.mergeRequestDetail.discussions.data.any { it.id == "disc-1" })
 
     var replyResult: String? = "unset"
     review.reply("disc-1", "Reply") { replyResult = it }
-    awaitCalls(h.completedCalls, 17)
+    awaitCondition("reply") { replyResult != "unset" }
     assertNull(replyResult)
     assertEquals(2, h.state.value.mergeRequestDetail.discussions.data.first { it.id == "disc-1" }.notes.size)
 
+    val callsBeforeResolve = h.completedCalls.get()
     review.setResolved("disc-1", true)
-    awaitCalls(h.completedCalls, 19)
+    awaitCalls(h.completedCalls, callsBeforeResolve + 2)
     assertTrue(h.state.value.mergeRequestDetail.discussions.data.first { it.id == "disc-1" }.notes.first().resolved == true)
 
     // rebase delays 4s then reloads MR
     review.rebase()
-    awaitCalls(h.completedCalls, 20)
+    awaitCondition("rebase started") { h.messages.any { it.startsWith("Rebasing !12") } }
     assertTrue(h.state.value.mergeRequestDetail.busy)
-    advanceTimeBy(4_000L)
-    awaitCalls(h.completedCalls, 21)
-    assertFalse(h.state.value.mergeRequestDetail.busy)
+    advanceTimeBy(4_100L)
+    awaitCondition("rebase settled") { !h.state.value.mergeRequestDetail.busy }
 
     // setClosed
     review.setClosed(true)
-    awaitCalls(h.completedCalls, 22)
+    awaitCondition("setClosed") { !h.state.value.mergeRequestDetail.busy && h.state.value.mergeRequestDetail.mergeRequest.data?.state == "closed" }
     assertEquals("closed", h.state.value.mergeRequestDetail.mergeRequest.data?.state)
 
     // merge failure (409) resets busy and records error; merge success sets merged
     failAction.set(true)
     review.merge(MergeOptions(squash = true))
-    awaitCalls(h.completedCalls, 23)
+    awaitCondition("merge failure") { !h.state.value.mergeRequestDetail.busy && h.errors.isNotEmpty() }
     assertFalse(h.state.value.mergeRequestDetail.busy)
     assertEquals(1, h.errors.size)
 
     failAction.set(false)
     review.merge(MergeOptions(squash = true))
-    awaitCalls(h.completedCalls, 24)
+    awaitCondition("merge success") { !h.state.value.mergeRequestDetail.busy && h.messages.contains("Merged !12") }
     assertEquals("merged", h.state.value.mergeRequestDetail.mergeRequest.data?.state)
-    assertTrue(h.messages.contains("Merged !12"))
   }
 
   @Test
@@ -322,7 +335,7 @@ class FeatureLogicTest {
     failAction.set(true)
     var runError: String? = null
     pipeline.runPipeline(1, "main") { runError = it }
-    awaitCalls(h.completedCalls, 1)
+    awaitCondition("runPipeline error") { runError != null }
     assertTrue(runError!!.contains("can't run pipelines"))
     assertTrue(h.navigated.isEmpty())
 
@@ -330,34 +343,51 @@ class FeatureLogicTest {
     failAction.set(false)
     var runOk: String? = "pending"
     pipeline.runPipeline(1, "release") { runOk = it }
-    awaitCalls(h.completedCalls, 2)
+    awaitCondition("runPipeline ok") { runOk != "pending" }
     assertNull(runOk)
     assertEquals(listOf(ScreenDestination.PipelineDetail(1, 99)), h.navigated)
 
     // Load pipeline, play manual job, cancel running pipeline
     try {
       pipeline.loadPipeline(1, 99)
-      awaitCalls(h.completedCalls, 4)
+      awaitCondition("loadPipeline") {
+        val pd = h.state.value.pipelineDetail
+        pd.pipeline.loaded && !pd.pipeline.loading && pd.jobs.loaded && !pd.jobs.loading
+      }
       assertEquals(2, h.state.value.pipelineDetail.jobs.data.size)
 
       pipeline.playJob(1, 42)
-      awaitCalls(h.completedCalls, 7)
-      assertTrue(h.messages.contains("Started deploy"))
+      awaitCondition("playJob") {
+        h.messages.contains("Started deploy") &&
+          !h.state.value.pipelineDetail.busy &&
+          !h.state.value.pipelineDetail.pipeline.loading &&
+          !h.state.value.pipelineDetail.jobs.loading
+      }
 
       pipeline.cancelPipeline()
-      awaitCalls(h.completedCalls, 8)
+      awaitCondition("cancelPipeline") {
+        !h.state.value.pipelineDetail.busy && h.messages.contains("Pipeline #99 canceled")
+      }
       assertEquals("canceled", h.state.value.pipelineDetail.pipeline.data?.status)
-      assertFalse(h.state.value.pipelineDetail.busy)
 
       // Job actions: cancel & retry
       pipeline.loadJob(1, 41)
-      awaitCalls(h.completedCalls, 10)
+      awaitCondition("loadJob") {
+        val jd = h.state.value.jobDetail
+        jd.job.loaded && !jd.job.loading && jd.trace.loaded && !jd.trace.loading
+      }
       pipeline.cancelJob()
-      awaitCalls(h.completedCalls, 13)
-      assertTrue(h.messages.contains("Canceled test"))
+      awaitCondition("cancelJob") {
+        h.messages.contains("Canceled test") &&
+          !h.state.value.jobDetail.busy &&
+          !h.state.value.jobDetail.job.loading &&
+          !h.state.value.pipelineDetail.pipeline.loading
+      }
 
       pipeline.retryJob()
-      awaitCalls(h.completedCalls, 14)
+      awaitCondition("retryJob") {
+        !h.state.value.jobDetail.busy && h.navigated.lastOrNull() == ScreenDestination.JobDetail(1, 43)
+      }
       assertEquals(ScreenDestination.JobDetail(1, 43), h.navigated.last())
     } finally {
       pipeline.onDestinationChanged(ScreenDestination.MainTabs)
