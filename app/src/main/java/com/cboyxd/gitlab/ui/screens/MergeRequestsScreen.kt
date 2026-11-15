@@ -41,6 +41,7 @@ import com.cboyxd.gitlab.ui.components.GlTopBar
 import com.cboyxd.gitlab.ui.components.InlineError
 import com.cboyxd.gitlab.ui.components.LoadingState
 import com.cboyxd.gitlab.ui.components.MergeRequestRow
+import com.cboyxd.gitlab.ui.components.TruncationNotice
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
@@ -76,6 +77,8 @@ fun MergeRequestsScreen(
   onRetry: () -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  truncated: Boolean = false,
+  onOpenInBrowser: (() -> Unit)? = null,
 ) {
   var filter by rememberSaveable { mutableStateOf(MergeRequestFilter.OPEN) }
   var project by rememberSaveable { mutableStateOf(ALL_PROJECTS) }
@@ -168,6 +171,15 @@ fun MergeRequestsScreen(
               Column {
                 MergeRequestRow(mr = mr, onClick = { onSelectMergeRequest(mr) })
                 GlDivider()
+              }
+            }
+            if (truncated) {
+              item(key = "truncated") {
+                TruncationNotice(
+                  message = "Showing the most recent ${all.size} merge requests.",
+                  modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+                  onOpenInBrowser = onOpenInBrowser,
+                )
               }
             }
           }

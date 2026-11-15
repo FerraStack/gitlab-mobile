@@ -217,6 +217,9 @@ fun ProjectSectionScreen(
           )
           GlDivider()
         }
+        state.pipelinesNextPage?.let { page -> item(key = "more") {
+          LoadMoreRow(page = page, loading = state.loadingMore, failed = state.loadMoreFailed, onLoad = { onLoadMore(ProjectSection.PIPELINES) })
+        } }
       }
       ProjectSection.COMMITS -> {
         state.effectiveRef?.let { ref ->
@@ -240,6 +243,9 @@ fun ProjectSectionScreen(
             CommitRow(commit = commit, onClick = { onOpenCommit(commit.id) })
             GlDivider()
           }
+          state.commitsNextPage?.let { page -> item(key = "more") {
+            LoadMoreRow(page = page, loading = state.loadingMore, failed = state.loadMoreFailed, onLoad = { onLoadMore(ProjectSection.COMMITS) })
+          } }
         }
       }
       ProjectSection.BRANCHES -> Feed(

@@ -61,6 +61,7 @@ import com.cboyxd.gitlab.ui.components.InlineError
 import com.cboyxd.gitlab.ui.components.IssueRow
 import com.cboyxd.gitlab.ui.components.LoadingState
 import com.cboyxd.gitlab.ui.components.MarkdownEditor
+import com.cboyxd.gitlab.ui.components.TruncationNotice
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
@@ -86,6 +87,8 @@ fun IssuesScreen(
   onRetry: () -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  truncated: Boolean = false,
+  onOpenInBrowser: (() -> Unit)? = null,
 ) {
   var filter by rememberSaveable { mutableStateOf(IssueFilter.OPEN) }
   var project by rememberSaveable { mutableStateOf(ALL_PROJECTS) }
@@ -178,6 +181,15 @@ fun IssuesScreen(
               Column {
                 IssueRow(issue = issue, onClick = { onSelectIssue(issue) })
                 GlDivider()
+              }
+            }
+            if (truncated) {
+              item(key = "truncated") {
+                TruncationNotice(
+                  message = "Showing the most recent ${all.size} issues.",
+                  modifier = Modifier.padding(horizontal = GlSpace.margin, vertical = GlSpace.tight),
+                  onOpenInBrowser = onOpenInBrowser,
+                )
               }
             }
           }

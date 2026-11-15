@@ -13,11 +13,14 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
  * Saved servers, encrypted with an Android Keystore key. Reads are served from memory after the
  * first decrypt; every method blocks on disk or Keystore, so call it off the main thread.
  */
-class InstanceStore(context: Context) {
+class InstanceStore(
+  context: Context,
+  keyProvider: SecretKeyProvider = DefaultSecretKeyProvider,
+) {
 
   private val prefs: SharedPreferences =
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-  private val secretStore = AndroidKeyStoreSecretStore(context, SECRET_PREFS_NAME)
+  private val secretStore = AndroidKeyStoreSecretStore(context, SECRET_PREFS_NAME, keyProvider)
 
   private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
   private val listType = Types.newParameterizedType(List::class.java, GitLabInstance::class.java)
