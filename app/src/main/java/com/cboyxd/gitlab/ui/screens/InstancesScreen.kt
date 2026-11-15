@@ -251,6 +251,7 @@ private fun CurrentServerCard(instance: GitLabInstance, modifier: Modifier = Mod
   }
   val (statusText, tone) = when {
     instance.token.isBlank() -> "Not signed in" to Tone.Neutral
+    instance.authFailure -> "Sign in again" to Tone.Danger
     instance.statusOk -> "Connected" to Tone.Success
     else -> "Unreachable" to Tone.Danger
   }

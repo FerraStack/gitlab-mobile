@@ -190,11 +190,14 @@ class InstantNotificationService : Service() {
   private class Round(val failed: Boolean = false, val retryAfterMs: Long? = null, val fullPollAt: Long? = null)
 
   private suspend fun checkOnce(accounts: List<GitLabInstance>, lastFullPoll: Long): Round {
+    if (!GitLabNotifications.allowed(this)) return Round()
+    val pollable = accounts.filterNot { it.authFailure }
+    if (pollable.isEmpty()) return Round()
     val started = System.currentTimeMillis()
     val store = InstanceStore.get(this)
     var changed: Boolean? = false
     var retryAfter: Long? = null
-    val results = accounts.map { account ->
+    val results = pollable.map { account ->
       val current = GitLabSessionTokens.fresh(store, account.id) ?: account
       when (val result = probe.check(current)) {
         ProbeResult.Changed -> { changed = true; AccountPoll(account.id, account.name, ok = true) }
