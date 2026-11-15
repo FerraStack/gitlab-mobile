@@ -1,6 +1,7 @@
 package com.cboyxd.gitlab
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -45,6 +46,7 @@ class MainActivity : FragmentActivity() {
   private var lockError by mutableStateOf<String?>(null)
   private var biometricPromptShowing = false
 
+  @SuppressLint("InvalidFragmentVersionForActivityResult")
   private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
     GitLabNotifications.schedule(this, viewModel.uiState.value.savedInstances.any { it.token.isNotBlank() })
   }

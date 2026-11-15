@@ -95,7 +95,7 @@ class PipelinePollingTest {
         return result
       }
       override fun notify(text: String) = Unit
-      override fun notifyError(text: String) = Unit
+      override fun notifyError(text: String, retryAction: (() -> Unit)?) = Unit
       override fun navigateTo(destination: ScreenDestination) = Unit
       override fun openExternal(url: String) = Unit
     }
