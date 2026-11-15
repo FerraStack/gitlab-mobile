@@ -174,6 +174,6 @@ class ExploreFeatureRoutingAndSearchTest {
     val blobs = host.state.value.search.blobs.data
     assertEquals(1, blobs.size)
     assertEquals("src/Rocket.kt", blobs.single().path)
-    assertEquals("/api/v4/projects/7/search?scope=blobs&search=launch&per_page=30", server.takeRequest().path)
+    assertEquals("/api/v4/projects/7/search?search=launch&scope=blobs&per_page=30", server.takeRequest().path)
   }
 }

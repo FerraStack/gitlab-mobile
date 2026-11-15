@@ -147,9 +147,9 @@ class TriageSearchReactionsRepositoryTest {
     assertEquals("src/Main.kt", blobs.single().path)
     assertEquals(7L, commits.single().projectId)
     assertEquals(7L, notes.single().projectId)
-    assertEquals("/api/v4/search?scope=blobs&search=main&per_page=30", server.takeRequest().path)
-    assertEquals("/api/v4/projects/7/search?scope=commits&search=search&per_page=30", server.takeRequest().path)
-    assertEquals("/api/v4/projects/7/search?scope=notes&search=Found&per_page=30", server.takeRequest().path)
+    assertEquals("/api/v4/search?search=main&scope=blobs&per_page=30", server.takeRequest().path)
+    assertEquals("/api/v4/projects/7/search?search=search&scope=commits&per_page=30", server.takeRequest().path)
+    assertEquals("/api/v4/projects/7/search?search=Found&scope=notes&per_page=30", server.takeRequest().path)
   }
 
   @Test

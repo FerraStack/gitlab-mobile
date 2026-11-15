@@ -349,7 +349,7 @@ fun IssueDetailScreen(
       onClearDraft = if (onClearDraft != null) ({ onClearDraft(draftKey) }) else null,
     )
   }
-  if (showInfo && issue != null) {
+  if (showInfo && triageTarget == null && issue != null) {
     InfoSheet(title = "Details", onDismiss = { showInfo = false }) {
       MetaRow(
         label = "Assignees",
@@ -777,7 +777,7 @@ fun MergeRequestDetailScreen(
       onClearDraft = if (onClearDraft != null) ({ onClearDraft(draftKey) }) else null,
     )
   }
-  if (showInfo && mr != null) {
+  if (showInfo && triageTarget == null && mr != null) {
     InfoSheet(title = "Details", onDismiss = { showInfo = false }) {
       MetaRow(
         label = "Assignees",

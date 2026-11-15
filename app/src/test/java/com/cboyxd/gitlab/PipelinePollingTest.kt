@@ -102,14 +102,16 @@ class PipelinePollingTest {
     return Triple(PipelineFeature(host), foreground, completedCalls)
   }
 
-  private suspend fun TestScope.awaitCalls(completedCalls: AtomicInteger, expected: Int) {
-    val deadline = System.currentTimeMillis() + 5_000L
-    while (completedCalls.get() < expected && System.currentTimeMillis() < deadline) {
+  private fun TestScope.awaitCalls(completedCalls: AtomicInteger, expectedTotal: Int) {
+    val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+    while (completedCalls.get() < expectedTotal && System.nanoTime() < deadline) {
       runCurrent()
-      withContext(Dispatchers.IO) { Thread.sleep(10) }
+      if (completedCalls.get() < expectedTotal) {
+        Thread.sleep(5)
+      }
     }
     runCurrent()
-    assertEquals(expected, completedCalls.get())
+    assertEquals(expectedTotal, completedCalls.get())
   }
 
   @Test

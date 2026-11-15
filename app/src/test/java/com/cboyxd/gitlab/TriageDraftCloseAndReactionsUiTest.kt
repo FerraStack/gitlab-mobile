@@ -101,11 +101,11 @@ class TriageDraftCloseAndReactionsUiTest {
 
     rule.onNodeWithContentDescription("More options").performClick()
     rule.onNodeWithText("Close merge request").performClick()
-    rule.onNodeWithText("Close merge request !1?").assertIsDisplayed()
+    rule.onNodeWithText("Close merge request !12?").assertIsDisplayed()
     assertTrue(closedCalls.isEmpty())
 
     rule.onNodeWithText("Cancel").performClick()
-    rule.onNodeWithText("Close merge request !1?").assertDoesNotExist()
+    rule.onNodeWithText("Close merge request !12?").assertDoesNotExist()
     assertTrue(closedCalls.isEmpty())
 
     rule.onNodeWithContentDescription("More options").performClick()
@@ -195,7 +195,7 @@ class TriageDraftCloseAndReactionsUiTest {
       }
     }
 
-    rule.onNodeWithText("Details").performClick()
+    rule.onNodeWithContentDescription("Details").performClick()
     rule.onNodeWithTag("edit_assignees").performClick()
     rule.onNodeWithTag("pick_member_2").performClick()
     rule.onNodeWithTag("triage_save").performClick()
