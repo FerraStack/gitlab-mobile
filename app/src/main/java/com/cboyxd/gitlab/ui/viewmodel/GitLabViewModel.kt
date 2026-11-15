@@ -15,9 +15,11 @@ import com.cboyxd.gitlab.data.auth.GitLabTokenRevoker
 import com.cboyxd.gitlab.data.auth.GitLabOAuth
 import com.cboyxd.gitlab.data.auth.GitLabPasswordLogin
 import com.cboyxd.gitlab.data.auth.PasswordLoginOutcome
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
 import com.cboyxd.gitlab.data.model.GitLabGroup
 import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.data.model.GitLabIssue
+import com.cboyxd.gitlab.data.model.GitLabIssueUpdate
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
 import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabProject
@@ -30,6 +32,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -43,6 +47,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
@@ -264,7 +270,11 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         if (force || !projectLoaded(destination.projectId)) code.open(destination.projectId)
       is ScreenDestination.ProjectCode -> {
         if (!projectLoaded(destination.projectId)) code.open(destination.projectId)
-        code.ensureTree()
+        if (destination.ref != null || destination.path.isNotEmpty()) {
+          code.openCodeDestination(destination.projectId, destination.ref, destination.path)
+        } else {
+          code.ensureTree()
+        }
       }
       is ScreenDestination.ProjectSectionList -> {
         if (!projectLoaded(destination.projectId)) code.open(destination.projectId)
@@ -275,10 +285,16 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         if (!projectLoaded(destination.projectId)) code.open(destination.projectId)
         code.loadSection(ProjectSection.RELEASES)
       }
-      is ScreenDestination.FileViewer ->
-        if (force || state.file.projectId != destination.projectId || state.file.path != destination.filePath || state.file.ref != destination.ref) {
+      is ScreenDestination.FileViewer -> {
+        val snippetId = destination.snippetId
+        if (snippetId != null) {
+          if (force || state.file.projectId != destination.projectId || state.file.snippetId != snippetId) {
+            code.loadSnippet(destination.projectId, snippetId)
+          }
+        } else if (force || state.file.projectId != destination.projectId || state.file.path != destination.filePath || state.file.ref != destination.ref || state.file.snippetId != null) {
           code.loadFile(destination.projectId, destination.filePath, destination.ref)
         }
+      }
       is ScreenDestination.CommitDetail ->
         if (force || state.commitDetail.projectId != destination.projectId || state.commitDetail.sha != destination.sha) {
           code.loadCommit(destination.projectId, destination.sha)
@@ -294,6 +310,10 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       is ScreenDestination.UserDetail ->
         if (force || state.userDetail.userId != destination.userId || state.userDetail.username != destination.username) {
           explore.loadUser(destination.userId, destination.username)
+        }
+      is ScreenDestination.Search ->
+        if (state.search.projectId != destination.projectId) {
+          explore.prepareSearch(destination.projectId, destination.projectName)
         }
       is ScreenDestination.IssueDetail ->
         if (force || state.issueDetail.projectId != destination.projectId || state.issueDetail.iid != destination.iid) {
@@ -467,6 +487,9 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     userDetail = UserDetailState(),
     search = SearchState(),
     labels = emptyMap(),
+    projectMembers = emptyMap(),
+    projectMilestones = emptyMap(),
+    drafts = emptyMap(),
     pendingStars = emptySet(),
     project = ProjectDetailState(),
     file = FileState(),
@@ -891,6 +914,21 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   // -------------------------------------------------------------------------------------------
+  // Comment drafts
+  // -------------------------------------------------------------------------------------------
+
+  fun setDraft(key: String, text: String) {
+    _uiState.update { s ->
+      val updated = if (text.isEmpty()) s.drafts - key else s.drafts + (key to text)
+      if (updated == s.drafts) s else s.copy(drafts = updated)
+    }
+  }
+
+  fun clearDraft(key: String) {
+    _uiState.update { s -> if (key in s.drafts) s.copy(drafts = s.drafts - key) else s }
+  }
+
+  // -------------------------------------------------------------------------------------------
   // Issues
   // -------------------------------------------------------------------------------------------
 
@@ -923,9 +961,35 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         }
         launch {
           api { repository.getIssueNotes(it, projectId, iid) }.fold(
-            onSuccess = { notes -> updateIssueDetail(projectId, iid) { d -> d.copy(notes = d.notes.success(notes)) } },
+            onSuccess = { notes ->
+              updateIssueDetail(projectId, iid) { d -> d.copy(notes = d.notes.success(notes)) }
+              val noteIds = notes.filterNot { it.system }.map { it.id }.distinct()
+              if (noteIds.isNotEmpty()) {
+                launch {
+                  val gate = Semaphore(6)
+                  val awards = coroutineScope {
+                    noteIds.map { noteId ->
+                      async {
+                        gate.withPermit {
+                          api { repository.getIssueNoteAwardEmojis(it, projectId, iid, noteId) }
+                            .getOrNull()?.let { noteId to it }
+                        }
+                      }
+                    }.awaitAll().filterNotNull().toMap()
+                  }
+                  if (awards.isNotEmpty()) {
+                    updateIssueDetail(projectId, iid) { d -> d.copy(noteAwardEmojis = d.noteAwardEmojis + awards) }
+                  }
+                }
+              }
+            },
             onFailure = { error -> updateIssueDetail(projectId, iid) { d -> d.copy(notes = d.notes.failure(error.userMessage())) } }
           )
+        }
+        launch {
+          api { repository.getIssueAwardEmojis(it, projectId, iid) }.onSuccess { awards ->
+            updateIssueDetail(projectId, iid) { d -> d.copy(awardEmojis = awards, awardEmojisLoaded = true) }
+          }
         }
       }
     }
@@ -942,13 +1006,18 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
 
   private fun replaceIssue(updated: GitLabIssue) {
     _uiState.update { s ->
-      fun List<GitLabIssue>.swap() = map { if (it.projectId == updated.projectId && it.iid == updated.iid) updated else it }
+      val currentDetail = s.issueDetail
+      val labelMap = s.labels[updated.projectId].orEmpty() + currentDetail.issue.data?.labelDetails.orEmpty().associateBy { it.name }
+      val withColors = if (updated.labelDetails.isEmpty() && updated.labels.isNotEmpty()) {
+        updated.copy(labelDetails = updated.labels.mapNotNull { labelMap[it] })
+      } else updated
+      fun List<GitLabIssue>.swap() = map { if (it.projectId == withColors.projectId && it.iid == withColors.iid) withColors else it }
       s.copy(
         issues = s.issues.copy(data = s.issues.data.swap()),
         project = s.project.copy(issues = s.project.issues.copy(data = s.project.issues.data.swap())),
-        issueDetail = if (s.issueDetail.projectId == updated.projectId && s.issueDetail.iid == updated.iid) {
-          s.issueDetail.copy(issue = s.issueDetail.issue.success(updated), busy = false)
-        } else s.issueDetail,
+        issueDetail = if (currentDetail.projectId == withColors.projectId && currentDetail.iid == withColors.iid) {
+          currentDetail.copy(issue = currentDetail.issue.success(withColors), busy = false)
+        } else currentDetail,
       )
     }
   }
@@ -1003,6 +1072,125 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         onFailure = { error -> onResult(error.userMessage()) }
       )
     }
+  }
+
+  fun triageIssue(update: GitLabIssueUpdate, onResult: ((String?) -> Unit)? = null) {
+    val detail = _uiState.value.issueDetail
+    val issue = detail.issue.data ?: return
+    if (detail.busy) {
+      val msg = "An update is already in progress."
+      if (onResult != null) onResult(msg) else notifyError(msg)
+      return
+    }
+    updateIssueDetail(issue.projectId, issue.iid) { it.copy(busy = true) }
+    session.launch {
+      api { repository.triageIssue(it, issue.projectId, issue.iid, update) }.fold(
+        onSuccess = { updated ->
+          replaceIssue(updated)
+          onResult?.invoke(null)
+          notify("Issue updated")
+        },
+        onFailure = { error ->
+          updateIssueDetail(issue.projectId, issue.iid) { it.copy(busy = false) }
+          val message = error.userMessage()
+          if (onResult != null) onResult(message) else notifyError(message)
+        },
+      )
+    }
+  }
+
+  fun toggleIssueReaction(name: String) {
+    val detail = _uiState.value.issueDetail
+    val issue = detail.issue.data ?: return
+    val key = "issue:$name"
+    if (key in detail.togglingReactions) return
+    val existing = detail.awardEmojis.firstOrNull { it.name == name && isCurrentUsersAward(it) }
+    updateIssueDetail(issue.projectId, issue.iid) { it.copy(togglingReactions = it.togglingReactions + key) }
+    session.launch {
+      if (existing != null) {
+        api { repository.deleteIssueAwardEmoji(it, issue.projectId, issue.iid, existing.id) }.fold(
+          onSuccess = {
+            updateIssueDetail(issue.projectId, issue.iid) { d ->
+              d.copy(
+                awardEmojis = d.awardEmojis.filterNot { it.id == existing.id },
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            updateIssueDetail(issue.projectId, issue.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            notifyError(error.userMessage())
+          },
+        )
+      } else {
+        api { repository.addIssueAwardEmoji(it, issue.projectId, issue.iid, name) }.fold(
+          onSuccess = { added ->
+            updateIssueDetail(issue.projectId, issue.iid) { d ->
+              d.copy(
+                awardEmojis = d.awardEmojis.filterNot { it.id == added.id } + added,
+                awardEmojisLoaded = true,
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            updateIssueDetail(issue.projectId, issue.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            notifyError(error.userMessage())
+          },
+        )
+      }
+    }
+  }
+
+  fun toggleIssueNoteReaction(noteId: Long, name: String) {
+    val detail = _uiState.value.issueDetail
+    val issue = detail.issue.data ?: return
+    val key = "note:$noteId:$name"
+    if (key in detail.togglingReactions) return
+    val existing = detail.noteAwardEmojis[noteId].orEmpty().firstOrNull { it.name == name && isCurrentUsersAward(it) }
+    updateIssueDetail(issue.projectId, issue.iid) { it.copy(togglingReactions = it.togglingReactions + key) }
+    session.launch {
+      if (existing != null) {
+        api { repository.deleteIssueNoteAwardEmoji(it, issue.projectId, issue.iid, noteId, existing.id) }.fold(
+          onSuccess = {
+            updateIssueDetail(issue.projectId, issue.iid) { d ->
+              val updated = d.noteAwardEmojis[noteId].orEmpty().filterNot { it.id == existing.id }
+              d.copy(
+                noteAwardEmojis = d.noteAwardEmojis + (noteId to updated),
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            updateIssueDetail(issue.projectId, issue.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            notifyError(error.userMessage())
+          },
+        )
+      } else {
+        api { repository.addIssueNoteAwardEmoji(it, issue.projectId, issue.iid, noteId, name) }.fold(
+          onSuccess = { added ->
+            updateIssueDetail(issue.projectId, issue.iid) { d ->
+              val updated = d.noteAwardEmojis[noteId].orEmpty().filterNot { it.id == added.id } + added
+              d.copy(
+                noteAwardEmojis = d.noteAwardEmojis + (noteId to updated),
+                togglingReactions = d.togglingReactions - key,
+              )
+            }
+          },
+          onFailure = { error ->
+            updateIssueDetail(issue.projectId, issue.iid) { it.copy(togglingReactions = it.togglingReactions - key) }
+            notifyError(error.userMessage())
+          },
+        )
+      }
+    }
+  }
+
+  private fun isCurrentUsersAward(award: GitLabAwardEmoji): Boolean {
+    val s = _uiState.value
+    val uid = s.currentUser.data?.id ?: 0L
+    val uname = (s.currentUser.data?.username ?: s.activeInstance?.username).orEmpty()
+    return (uid > 0L && award.user.id == uid) || (uname.isNotBlank() && award.user.username.equals(uname, ignoreCase = true))
   }
 
   fun postIssueNote(body: String, onResult: (String?) -> Unit) {

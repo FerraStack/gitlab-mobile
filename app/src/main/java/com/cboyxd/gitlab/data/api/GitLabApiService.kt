@@ -2,19 +2,27 @@ package com.cboyxd.gitlab.data.api
 
 import com.cboyxd.gitlab.data.model.GitLabAvatar
 import com.cboyxd.gitlab.data.model.GitLabApprovals
+import com.cboyxd.gitlab.data.model.GitLabAwardEmoji
+import com.cboyxd.gitlab.data.model.GitLabBlobSearchResult
 import com.cboyxd.gitlab.data.model.GitLabBranch
 import com.cboyxd.gitlab.data.model.GitLabCommit
 import com.cboyxd.gitlab.data.model.GitLabContributor
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabLabel
+import com.cboyxd.gitlab.data.model.GitLabMilestone
+import com.cboyxd.gitlab.data.model.GitLabNamespace
+import com.cboyxd.gitlab.data.model.GitLabNoteSearchResult
 import com.cboyxd.gitlab.data.model.GitLabRelease
+import com.cboyxd.gitlab.data.model.GitLabSnippet
 import com.cboyxd.gitlab.data.model.GitLabTag
 import com.cboyxd.gitlab.data.model.GitLabFileDiff
 import com.cboyxd.gitlab.data.model.GitLabGroup
 import com.cboyxd.gitlab.data.model.GitLabIssueStatistics
 import com.cboyxd.gitlab.data.model.GitLabIssue
+import com.cboyxd.gitlab.data.model.GitLabIssueUpdate
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
+import com.cboyxd.gitlab.data.model.GitLabMergeRequestUpdate
 import com.cboyxd.gitlab.data.model.GitLabNote
 import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabProject
@@ -25,6 +33,8 @@ import com.cboyxd.gitlab.data.model.GitLabUserStatus
 import com.squareup.moshi.JsonClass
 import okhttp3.ResponseBody
 import retrofit2.Response
+import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.Field
 import retrofit2.http.FieldMap
 import retrofit2.http.FormUrlEncoded
@@ -645,6 +655,230 @@ interface GitLabApiService {
     @Query("scope") scope: String = "merge_requests",
     @Query("per_page") perPage: Int = 30
   ): Response<List<GitLabMergeRequest>>
+
+  @GET("api/v4/search")
+  suspend fun searchBlobs(
+    @Query("search") search: String,
+    @Query("scope") scope: String = "blobs",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabBlobSearchResult>>
+
+  @GET("api/v4/search")
+  suspend fun searchCommits(
+    @Query("search") search: String,
+    @Query("scope") scope: String = "commits",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabCommit>>
+
+  @GET("api/v4/search")
+  suspend fun searchNotes(
+    @Query("search") search: String,
+    @Query("scope") scope: String = "notes",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabNoteSearchResult>>
+
+  @GET("api/v4/projects/{id}/search")
+  suspend fun searchProjectIssues(
+    @Path("id") projectId: Long,
+    @Query("search") search: String,
+    @Query("scope") scope: String = "issues",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabIssue>>
+
+  @GET("api/v4/projects/{id}/search")
+  suspend fun searchProjectMergeRequests(
+    @Path("id") projectId: Long,
+    @Query("search") search: String,
+    @Query("scope") scope: String = "merge_requests",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabMergeRequest>>
+
+  @GET("api/v4/projects/{id}/search")
+  suspend fun searchProjectBlobs(
+    @Path("id") projectId: Long,
+    @Query("search") search: String,
+    @Query("scope") scope: String = "blobs",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabBlobSearchResult>>
+
+  @GET("api/v4/projects/{id}/search")
+  suspend fun searchProjectCommits(
+    @Path("id") projectId: Long,
+    @Query("search") search: String,
+    @Query("scope") scope: String = "commits",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabCommit>>
+
+  @GET("api/v4/projects/{id}/search")
+  suspend fun searchProjectNotes(
+    @Path("id") projectId: Long,
+    @Query("search") search: String,
+    @Query("scope") scope: String = "notes",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabNoteSearchResult>>
+
+  @GET("api/v4/projects/{id}/search")
+  suspend fun searchProjectUsers(
+    @Path("id") projectId: Long,
+    @Query("search") search: String,
+    @Query("scope") scope: String = "users",
+    @Query("per_page") perPage: Int = 30
+  ): Response<List<GitLabUser>>
+
+  // ---- Triage & project metadata ----
+
+  @PUT("api/v4/projects/{id}/issues/{issue_iid}")
+  suspend fun triageIssue(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Body update: GitLabIssueUpdate
+  ): Response<GitLabIssue>
+
+  @PUT("api/v4/projects/{id}/merge_requests/{mr_iid}")
+  suspend fun updateMergeRequest(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Body update: GitLabMergeRequestUpdate
+  ): Response<GitLabMergeRequest>
+
+  @GET("api/v4/projects/{id}/members/all")
+  suspend fun getProjectMembers(
+    @Path("id") projectId: Long,
+    @Query("query") query: String? = null,
+    @Query("per_page") perPage: Int = 100,
+    @Query("page") page: Int = 1
+  ): Response<List<GitLabUser>>
+
+  @GET("api/v4/projects/{id}/milestones")
+  suspend fun getProjectMilestones(
+    @Path("id") projectId: Long,
+    @Query("state") state: String? = "active",
+    @Query("per_page") perPage: Int = 100,
+    @Query("page") page: Int = 1
+  ): Response<List<GitLabMilestone>>
+
+  // ---- Namespaces & snippets ----
+
+  @GET("api/v4/namespaces/{id}")
+  suspend fun getNamespace(
+    @Path(value = "id", encoded = true) path: String
+  ): Response<GitLabNamespace>
+
+  @GET("api/v4/snippets/{snippet_id}")
+  suspend fun getSnippet(@Path("snippet_id") snippetId: Long): Response<GitLabSnippet>
+
+  @Streaming
+  @GET("api/v4/snippets/{snippet_id}/raw")
+  suspend fun getSnippetRaw(@Path("snippet_id") snippetId: Long): Response<ResponseBody>
+
+  @GET("api/v4/projects/{id}/snippets/{snippet_id}")
+  suspend fun getProjectSnippet(
+    @Path("id") projectId: Long,
+    @Path("snippet_id") snippetId: Long
+  ): Response<GitLabSnippet>
+
+  @Streaming
+  @GET("api/v4/projects/{id}/snippets/{snippet_id}/raw")
+  suspend fun getProjectSnippetRaw(
+    @Path("id") projectId: Long,
+    @Path("snippet_id") snippetId: Long
+  ): Response<ResponseBody>
+
+  // ---- Award emojis ----
+
+  @GET("api/v4/projects/{id}/issues/{issue_iid}/award_emoji")
+  suspend fun getIssueAwardEmojis(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Query("per_page") perPage: Int = 100
+  ): Response<List<GitLabAwardEmoji>>
+
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/issues/{issue_iid}/award_emoji")
+  suspend fun addIssueAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Field("name") name: String
+  ): Response<GitLabAwardEmoji>
+
+  @DELETE("api/v4/projects/{id}/issues/{issue_iid}/award_emoji/{award_id}")
+  suspend fun deleteIssueAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Path("award_id") awardId: Long
+  ): Response<ResponseBody>
+
+  @GET("api/v4/projects/{id}/merge_requests/{mr_iid}/award_emoji")
+  suspend fun getMergeRequestAwardEmojis(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Query("per_page") perPage: Int = 100
+  ): Response<List<GitLabAwardEmoji>>
+
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/award_emoji")
+  suspend fun addMergeRequestAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Field("name") name: String
+  ): Response<GitLabAwardEmoji>
+
+  @DELETE("api/v4/projects/{id}/merge_requests/{mr_iid}/award_emoji/{award_id}")
+  suspend fun deleteMergeRequestAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Path("award_id") awardId: Long
+  ): Response<ResponseBody>
+
+  @GET("api/v4/projects/{id}/issues/{issue_iid}/notes/{note_id}/award_emoji")
+  suspend fun getIssueNoteAwardEmojis(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Path("note_id") noteId: Long,
+    @Query("per_page") perPage: Int = 100
+  ): Response<List<GitLabAwardEmoji>>
+
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/issues/{issue_iid}/notes/{note_id}/award_emoji")
+  suspend fun addIssueNoteAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Path("note_id") noteId: Long,
+    @Field("name") name: String
+  ): Response<GitLabAwardEmoji>
+
+  @DELETE("api/v4/projects/{id}/issues/{issue_iid}/notes/{note_id}/award_emoji/{award_id}")
+  suspend fun deleteIssueNoteAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("issue_iid") issueIid: Long,
+    @Path("note_id") noteId: Long,
+    @Path("award_id") awardId: Long
+  ): Response<ResponseBody>
+
+  @GET("api/v4/projects/{id}/merge_requests/{mr_iid}/notes/{note_id}/award_emoji")
+  suspend fun getMergeRequestNoteAwardEmojis(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Path("note_id") noteId: Long,
+    @Query("per_page") perPage: Int = 100
+  ): Response<List<GitLabAwardEmoji>>
+
+  @FormUrlEncoded
+  @POST("api/v4/projects/{id}/merge_requests/{mr_iid}/notes/{note_id}/award_emoji")
+  suspend fun addMergeRequestNoteAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Path("note_id") noteId: Long,
+    @Field("name") name: String
+  ): Response<GitLabAwardEmoji>
+
+  @DELETE("api/v4/projects/{id}/merge_requests/{mr_iid}/notes/{note_id}/award_emoji/{award_id}")
+  suspend fun deleteMergeRequestNoteAwardEmoji(
+    @Path("id") projectId: Long,
+    @Path("mr_iid") mrIid: Long,
+    @Path("note_id") noteId: Long,
+    @Path("award_id") awardId: Long
+  ): Response<ResponseBody>
 
   /** Counts of the user's to-dos and merge requests; cheap enough to ask every minute. */
   @GET("api/v4/user_counts")
