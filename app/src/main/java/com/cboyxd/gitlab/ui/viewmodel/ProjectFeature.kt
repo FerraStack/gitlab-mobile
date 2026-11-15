@@ -210,7 +210,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
               }
             }
           }
-          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) { loadMore(section) } }
         }
       }
       ProjectSection.MERGE_REQUESTS -> {
@@ -233,7 +233,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
               }
             }
           }
-          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) { loadMore(section) } }
         }
       }
       else -> Unit
@@ -249,6 +249,8 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       ProjectSection.ISSUES -> d.issues
       ProjectSection.MERGE_REQUESTS -> d.mergeRequests
       ProjectSection.PIPELINES -> d.pipelines
+      ProjectSection.ENVIRONMENTS -> d.environments
+      ProjectSection.CI_VARIABLES -> d.ciVariables
       ProjectSection.COMMITS -> d.commits
       ProjectSection.BRANCHES -> d.branches
       ProjectSection.TAGS -> d.tags
@@ -288,6 +290,10 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       ProjectSection.PIPELINES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(pipelines = it.pipelines.start()) } },
         { instance -> repo.getPipelines(instance, id).map { list -> repo.attachJobs(instance, list, limit = 8) } },
         { s, r -> s.withProject(id) { it.copy(pipelines = it.pipelines.settle(r)) } })
+      ProjectSection.ENVIRONMENTS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(environments = it.environments.start()) } },
+        { repo.getProjectEnvironments(it, id) }, { s, r -> s.withProject(id) { it.copy(environments = it.environments.settle(r)) } })
+      ProjectSection.CI_VARIABLES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(ciVariables = it.ciVariables.start()) } },
+        { repo.getProjectVariables(it, id) }, { s, r -> s.withProject(id) { it.copy(ciVariables = it.ciVariables.settle(r)) } })
       ProjectSection.COMMITS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(commits = it.commits.start()) } },
         { if (ref == null) Result.success(emptyList()) else repo.getCommits(it, id, ref) },
         { s, r -> s.withProject(id) { it.copy(commits = it.commits.settle(r)) } })

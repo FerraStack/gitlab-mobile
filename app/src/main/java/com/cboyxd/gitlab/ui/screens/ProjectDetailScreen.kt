@@ -49,6 +49,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material.icons.outlined.VpnKey
 import com.cboyxd.gitlab.ui.components.LoadingPlaceholder
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -136,6 +137,7 @@ fun ProjectDetailScreen(
   onLoadRefs: () -> Unit = {},
   onFilterRefs: (String) -> Unit = {},
   onRefresh: () -> Unit = onRetry,
+  onOpenSnippets: () -> Unit = {},
 ) {
   val project = state.project.data
   val context = LocalContext.current
@@ -170,6 +172,11 @@ fun ProjectDetailScreen(
                 leadingIcon = { Icon(Icons.Outlined.History, null, tint = c.textSecondary) },
                 onClick = { menuOpen = false; onOpenSection(ProjectSection.ACTIVITY) },
               )
+              DropdownMenuItem(
+                text = { Text("Snippets", style = Gl.type.body, color = c.textPrimary) },
+                leadingIcon = { Icon(Icons.Outlined.Code, null, tint = c.textSecondary) },
+                onClick = { menuOpen = false; onOpenSnippets() },
+              )
             }
           }
         }
@@ -200,6 +207,7 @@ fun ProjectDetailScreen(
         onOpenSection = onOpenSection,
         onOpenCode = onOpenCode,
         onOpenRelease = onOpenRelease,
+        onOpenSnippets = onOpenSnippets,
         onOpenInBrowser = onOpenInBrowser,
         onChangeBranch = { showRefs = true },
       )
@@ -238,6 +246,7 @@ private fun ProjectPage(
   onOpenSection: (ProjectSection) -> Unit,
   onOpenCode: () -> Unit,
   onOpenRelease: (String) -> Unit,
+  onOpenSnippets: () -> Unit,
   onOpenInBrowser: (String) -> Unit,
   onChangeBranch: () -> Unit,
 ) {
@@ -288,6 +297,10 @@ private fun ProjectPage(
         }
         if (project.jobsEnabled != false) {
           NavRow(Icons.Outlined.PlayCircleOutline, GlTile.yellow, "Pipelines", null) { onOpenSection(ProjectSection.PIPELINES) }
+          NavRow(Icons.Outlined.Public, GlTile.blue, "Environments", null) { onOpenSection(ProjectSection.ENVIRONMENTS) }
+          if (canWrite) {
+            NavRow(Icons.Outlined.VpnKey, GlTile.gray, "CI/CD variables", null) { onOpenSection(ProjectSection.CI_VARIABLES) }
+          }
         }
         val releases = state.releases
         val releaseCount = releases.data.size.takeIf { releases.loaded && releases.error == null }
@@ -305,6 +318,7 @@ private fun ProjectPage(
           "Contributors",
           contributors.data.size.takeIf { contributors.loaded && contributors.error == null && it > 0 }?.toString(),
         ) { onOpenSection(ProjectSection.CONTRIBUTORS) }
+        NavRow(Icons.Outlined.Code, GlTile.purple, "Snippets", null, onClick = onOpenSnippets)
       }
     }
 

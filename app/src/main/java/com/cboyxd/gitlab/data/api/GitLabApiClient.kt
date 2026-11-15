@@ -10,12 +10,17 @@ import com.squareup.moshi.JsonWriter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import okhttp3.Cache
+import okhttp3.CacheControl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Response as OkHttpResponse
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.lang.reflect.Type
 import java.util.concurrent.TimeUnit
@@ -47,7 +52,47 @@ object GitLabApiClient {
   @Volatile
   internal var clientOverride: OkHttpClient? = null
 
+  @Volatile
+  private var httpCache: Cache? = null
+
+  @Volatile
+  private var onlineCheck: () -> Boolean = { true }
+
+  /** Configures a shared OkHttp disk cache for API GET responses and offline fallback. */
+  fun configureCache(
+    cacheDir: File,
+    maxBytes: Long = 20L * 1024 * 1024,
+    isOnline: () -> Boolean = { true },
+  ) {
+    val previous = httpCache
+    httpCache = Cache(cacheDir, maxBytes)
+    onlineCheck = isOnline
+    services.clear()
+    try {
+      previous?.close()
+    } catch (_: Exception) {
+    }
+  }
+
+  fun clearDiskCache() {
+    try {
+      httpCache?.evictAll()
+    } catch (_: Exception) {
+    }
+  }
+
   internal fun clearCache() = services.clear()
+
+  internal fun resetCacheForTest() {
+    val previous = httpCache
+    httpCache = null
+    onlineCheck = { true }
+    services.clear()
+    try {
+      previous?.close()
+    } catch (_: Exception) {
+    }
+  }
 
   private data class Entry(val key: String, val service: GitLabApiService)
 
@@ -85,9 +130,77 @@ object GitLabApiClient {
       chain.proceed(request)
     }
 
+    val offlineCacheInterceptor = Interceptor { chain ->
+      val request = chain.request()
+      if (download || httpCache == null || !request.method.equals("GET", ignoreCase = true)) {
+        return@Interceptor chain.proceed(request)
+      }
+
+      fun tryCachedResponse(): OkHttpResponse? {
+        val cachedReq = request.newBuilder()
+          .cacheControl(CacheControl.Builder().onlyIfCached().maxStale(7, TimeUnit.DAYS).build())
+          .build()
+        val cached = chain.proceed(cachedReq)
+        return if (cached.code != 504) cached else {
+          cached.close()
+          null
+        }
+      }
+
+      if (!onlineCheck()) {
+        tryCachedResponse()?.let { return@Interceptor it }
+      }
+
+      try {
+        val response = chain.proceed(request)
+        if (response.code in setOf(500, 502, 503, 504)) {
+          tryCachedResponse()?.let { cached ->
+            response.close()
+            return@Interceptor cached
+          }
+        }
+        response
+      } catch (e: IOException) {
+        tryCachedResponse() ?: throw e
+      }
+    }
+
+    val cacheableGetNetworkInterceptor = Interceptor { chain ->
+      val request = chain.request()
+      val response = chain.proceed(request)
+      if (!download && httpCache != null && request.method.equals("GET", ignoreCase = true) && response.isSuccessful) {
+        val cacheControl = response.header("Cache-Control").orEmpty()
+        val uncacheable = cacheControl.isBlank() ||
+          cacheControl.contains("no-store", ignoreCase = true) ||
+          cacheControl.contains("no-cache", ignoreCase = true) ||
+          cacheControl.contains("must-revalidate", ignoreCase = true) ||
+          cacheControl.contains("max-age=0", ignoreCase = true)
+        if (uncacheable) {
+          return@Interceptor response.newBuilder()
+            .removeHeader("Pragma")
+            .removeHeader("Expires")
+            .header("Cache-Control", "private, max-age=0")
+            .build()
+        }
+      }
+      response
+    }
+
     val client = (clientOverride ?: baseHttpClient).newBuilder()
+      .apply {
+        if (!download) {
+          httpCache?.let { cache(it) }
+        }
+      }
       .addInterceptor(authInterceptor)
-      .apply { if (download) callTimeout(0, TimeUnit.MILLISECONDS) }
+      .apply {
+        if (!download) {
+          addInterceptor(offlineCacheInterceptor)
+          addNetworkInterceptor(cacheableGetNetworkInterceptor)
+        } else {
+          callTimeout(0, TimeUnit.MILLISECONDS)
+        }
+      }
       .build()
 
     return Retrofit.Builder()

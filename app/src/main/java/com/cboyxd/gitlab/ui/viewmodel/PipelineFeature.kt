@@ -180,7 +180,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         },
         onFailure = { error ->
           setBusy(false)
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { playJob(projectId, jobId) }
         },
       )
     }
@@ -202,7 +202,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         onSuccess = { bytes -> host.notify("Saved artifacts (${formatBytes(bytes)})") },
         onFailure = {
           withContext(Dispatchers.IO) { runCatching(discard) }
-          host.notifyError(it.userMessage())
+          host.notifyError(it.userMessage()) { downloadArtifacts(open, discard) }
         },
       )
     }
@@ -223,7 +223,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         },
         onFailure = { error ->
           setBusy(false)
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { cancelJob() }
         },
       )
     }
@@ -256,7 +256,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         },
         onFailure = { error ->
           host.state.update { it.copy(jobDetail = it.jobDetail.copy(busy = false)) }
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { retryJob() }
         }
       )
     }
@@ -277,7 +277,7 @@ class PipelineFeature internal constructor(private val host: SessionHost) {
         },
         onFailure = { error ->
           host.state.update { it.copy(pipelineDetail = it.pipelineDetail.copy(busy = false)) }
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { cancelPipeline() }
         }
       )
     }

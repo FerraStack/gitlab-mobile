@@ -2,12 +2,15 @@ package com.cboyxd.gitlab.ui.viewmodel
 
 import com.cboyxd.gitlab.data.model.GitLabApprovals
 import com.cboyxd.gitlab.data.model.GitLabBranch
+import com.cboyxd.gitlab.data.model.GitLabCiVariable
 import com.cboyxd.gitlab.data.model.GitLabCommit
 import com.cboyxd.gitlab.data.model.GitLabContributor
+import com.cboyxd.gitlab.data.model.GitLabEnvironment
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.data.model.GitLabRelease
+import com.cboyxd.gitlab.data.model.GitLabSnippet
 import com.cboyxd.gitlab.data.model.GitLabTag
 import com.cboyxd.gitlab.data.repository.JobTrace
 import com.cboyxd.gitlab.data.model.GitLabFileDiff
@@ -21,6 +24,7 @@ import com.cboyxd.gitlab.data.model.GitLabProject
 import com.cboyxd.gitlab.data.model.GitLabTreeItem
 import com.cboyxd.gitlab.data.model.GitLabUser
 import com.cboyxd.gitlab.data.model.GitLabUserStatus
+import com.squareup.moshi.JsonClass
 
 /**
  * A value that loads on its own: screens render data, a spinner, or an error with retry
@@ -48,10 +52,13 @@ sealed class ScreenDestination {
   data object Instances : ScreenDestination()
   data object NotificationSettings : ScreenDestination()
   data object NotificationDiagnostics : ScreenDestination()
+  data object SecuritySettings : ScreenDestination()
   data object IssuesList : ScreenDestination()
   data object MergeRequestsList : ScreenDestination()
   data object PipelinesList : ScreenDestination()
   data object GroupsList : ScreenDestination()
+  data class SnippetsList(val projectId: Long? = null) : ScreenDestination()
+  data class SnippetDetail(val snippetId: Long, val projectId: Long? = null) : ScreenDestination()
   data class GroupProjects(val group: GitLabGroup) : ScreenDestination()
   data class ProjectDetail(val projectId: Long) : ScreenDestination()
   /** Repository browser; path and ref live in [ProjectDetailState]. */
@@ -92,6 +99,7 @@ enum class InboxFilter(val label: String) {
   MENTIONED("Mentioned")
 }
 
+@JsonClass(generateAdapter = true)
 data class GitLabNotification(
   val id: String,
   val type: NotificationType,
@@ -125,6 +133,8 @@ enum class ProjectSection(val title: String) {
   ISSUES("Issues"),
   MERGE_REQUESTS("Merge requests"),
   PIPELINES("Pipelines"),
+  ENVIRONMENTS("Environments"),
+  CI_VARIABLES("CI/CD variables"),
   COMMITS("Commits"),
   BRANCHES("Branches"),
   TAGS("Tags"),
@@ -147,6 +157,8 @@ data class ProjectDetailState(
   val issues: Loadable<List<GitLabIssue>> = emptyFeed(),
   val mergeRequests: Loadable<List<GitLabMergeRequest>> = emptyFeed(),
   val pipelines: Loadable<List<GitLabPipeline>> = emptyFeed(),
+  val environments: Loadable<List<GitLabEnvironment>> = emptyFeed(),
+  val ciVariables: Loadable<List<GitLabCiVariable>> = emptyFeed(),
   val commits: Loadable<List<GitLabCommit>> = emptyFeed(),
   val branches: Loadable<List<GitLabBranch>> = emptyFeed(),
   val tags: Loadable<List<GitLabTag>> = emptyFeed(),
@@ -298,8 +310,14 @@ data class GitLabUiState(
   val jobDetail: JobDetailState = JobDetailState(),
   val userDetail: UserDetailState = UserDetailState(),
   val search: SearchState = SearchState(),
+  val snippets: SnippetsState = SnippetsState(),
+  val snippetDetail: SnippetDetailState = SnippetDetailState(),
   /** Label colors per project id, fetched once per project. */
   val labels: Map<Long, Map<String, GitLabLabel>> = emptyMap(),
+  val isOffline: Boolean = false,
+  val offlineSnapshotSavedAtMs: Long? = null,
+  val recentIssues: List<GitLabIssue> = emptyList(),
+  val recentMergeRequests: List<GitLabMergeRequest> = emptyList(),
 
   val loginState: LoginState = LoginState(),
 ) {
@@ -307,6 +325,18 @@ data class GitLabUiState(
   val isSignedIn: Boolean get() = activeInstance?.token?.isNotBlank() == true
   val unreadCount: Int get() = notifications.data.count { it.isUnread }
 }
+
+data class SnippetsState(
+  val projectId: Long? = null,
+  val items: Loadable<List<GitLabSnippet>> = emptyFeed(),
+)
+
+data class SnippetDetailState(
+  val snippetId: Long = 0,
+  val projectId: Long? = null,
+  val snippet: Loadable<GitLabSnippet?> = Loadable(null),
+  val rawContent: Loadable<String?> = Loadable(null),
+)
 
 /** One-off message shown as a snackbar. Errors with an action stay until dismissed. */
 data class UiMessage(

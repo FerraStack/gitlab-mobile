@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.outlined.Book
+import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.MergeType
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.TextButton
@@ -207,6 +208,14 @@ fun HomeScreen(
             feed = state.groups,
             count = null,
             onClick = { onNavigate(ScreenDestination.GroupsList) },
+          )
+          WorkRow(
+            icon = Icons.Outlined.Code,
+            tile = GlTile.purple,
+            title = "Snippets",
+            feed = state.snippets.items,
+            count = null,
+            onClick = { onNavigate(ScreenDestination.SnippetsList(null)) },
           )
         }
         item(key = "work-divider") { GlDivider(Modifier.padding(top = GlSpace.tight)) }

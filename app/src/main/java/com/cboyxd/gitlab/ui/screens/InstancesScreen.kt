@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -102,6 +103,7 @@ fun InstancesScreen(
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
   onOpenNotifications: () -> Unit = {},
+  onOpenSecurity: () -> Unit = {},
 ) {
   var showAdd by rememberSaveable { mutableStateOf(false) }
   var pendingRemoval by remember { mutableStateOf<GitLabInstance?>(null) }
@@ -130,6 +132,14 @@ fun InstancesScreen(
         body = "You can read public projects on GitLab.com. Sign in to GitLab.com or your company's server to see your issues, merge requests and to-dos.",
         actionLabel = "Sign in",
         onAction = openAdd,
+      )
+      GlDivider()
+      GlRow(
+        title = "Security & app lock",
+        subtitle = "Biometric lock, timeout and screenshot protection",
+        leading = { Icon(Icons.Outlined.Lock, contentDescription = null, tint = Gl.colors.textSecondary) },
+        onClick = onOpenSecurity,
+        modifier = Modifier.testTag("security_settings_row"),
       )
     } else {
       LazyColumn(
@@ -180,6 +190,15 @@ fun InstancesScreen(
             leading = { Icon(Icons.Outlined.NotificationsNone, contentDescription = null, tint = Gl.colors.textSecondary) },
             onClick = onOpenNotifications,
             modifier = Modifier.testTag("notifications_row"),
+          )
+        }
+        item(key = "security") {
+          GlRow(
+            title = "Security & app lock",
+            subtitle = "Biometric lock, timeout and screenshot protection",
+            leading = { Icon(Icons.Outlined.Lock, contentDescription = null, tint = Gl.colors.textSecondary) },
+            onClick = onOpenSecurity,
+            modifier = Modifier.testTag("security_settings_row"),
           )
         }
         item(key = "help") {

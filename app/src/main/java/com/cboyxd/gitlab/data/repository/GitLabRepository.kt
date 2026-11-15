@@ -12,16 +12,20 @@ import com.cboyxd.gitlab.data.api.stagesFromJobs
 import com.cboyxd.gitlab.data.api.toGitLabException
 import com.cboyxd.gitlab.data.model.GitLabApprovals
 import com.cboyxd.gitlab.data.model.GitLabBranch
+import com.cboyxd.gitlab.data.model.GitLabCiVariable
 import com.cboyxd.gitlab.data.model.GitLabCommit
 import com.cboyxd.gitlab.data.model.GitLabContributor
+import com.cboyxd.gitlab.data.model.GitLabDeployment
 import com.cboyxd.gitlab.data.model.GitLabDiscussion
 import com.cboyxd.gitlab.data.model.GitLabDiffRefs
 import com.cboyxd.gitlab.data.model.DiffLineAnchor
+import com.cboyxd.gitlab.data.model.GitLabEnvironment
 import com.cboyxd.gitlab.data.model.diffNotePosition
 import com.cboyxd.gitlab.data.model.GitLabEvent
 import com.cboyxd.gitlab.data.model.GitLabJob
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.data.model.GitLabRelease
+import com.cboyxd.gitlab.data.model.GitLabSnippet
 import com.cboyxd.gitlab.data.model.GitLabTag
 import com.cboyxd.gitlab.data.model.GitLabFileDiff
 import com.cboyxd.gitlab.data.model.GitLabGroup
@@ -1113,6 +1117,89 @@ class GitLabRepository {
   )
 
   private fun GitLabNote.withDisplayTimes() = copy(createdAt = formatGitLabTime(createdAt))
+
+  private fun GitLabSnippet.withDisplayTimes() = copy(
+    createdAt = formatGitLabTime(createdAt),
+    updatedAt = formatGitLabTime(updatedAt),
+  )
+
+  private fun GitLabDeployment.withDisplayTimes() = copy(
+    createdAt = formatGitLabTime(createdAt),
+    updatedAt = formatGitLabTime(updatedAt),
+  )
+
+  private fun GitLabEnvironment.withDisplayTimes() = copy(
+    updatedAt = updatedAt?.let(::formatGitLabTime),
+    lastDeployment = lastDeployment?.withDisplayTimes(),
+  )
+
+  suspend fun getSnippets(instance: GitLabInstance): Result<List<GitLabSnippet>> = call {
+    requireToken(instance)
+    val api = service(instance)
+    fetchPages(maxPages = 2) { page -> api.getSnippets(page = page) }
+      .map { it.withDisplayTimes() }
+  }
+
+  suspend fun getProjectSnippets(instance: GitLabInstance, projectId: Long): Result<List<GitLabSnippet>> = call {
+    val api = service(instance)
+    fetchPages(maxPages = 2) { page -> api.getProjectSnippets(projectId, page = page) }
+      .map { it.withDisplayTimes() }
+  }
+
+  suspend fun getSnippet(
+    instance: GitLabInstance,
+    snippetId: Long,
+    projectId: Long? = null,
+  ): Result<GitLabSnippet> = call {
+    val api = service(instance)
+    val response = if (projectId != null) {
+      api.getProjectSnippet(projectId, snippetId)
+    } else {
+      api.getSnippet(snippetId)
+    }
+    response.requireBody().withDisplayTimes()
+  }
+
+  suspend fun getSnippetRaw(
+    instance: GitLabInstance,
+    snippetId: Long,
+    projectId: Long? = null,
+  ): Result<String> = call {
+    val api = service(instance)
+    val response = if (projectId != null) {
+      api.getProjectSnippetRaw(projectId, snippetId)
+    } else {
+      api.getSnippetRaw(snippetId)
+    }
+    if (!response.isSuccessful) throw response.toGitLabException()
+    decodeBody(response.body())
+  }
+
+  suspend fun getProjectVariables(
+    instance: GitLabInstance,
+    projectId: Long,
+  ): Result<List<GitLabCiVariable>> = call {
+    requireToken(instance)
+    val api = service(instance)
+    try {
+      fetchPages(maxPages = 2) { page -> api.getProjectVariables(projectId, page = page) }
+        .sortedBy { it.key.lowercase() }
+    } catch (e: GitLabApiException) {
+      if (e.code == 403) {
+        throw GitLabApiException(403, "You need Maintainer or Owner access to view CI/CD variables.")
+      }
+      throw e
+    }
+  }
+
+  suspend fun getProjectEnvironments(
+    instance: GitLabInstance,
+    projectId: Long,
+  ): Result<List<GitLabEnvironment>> = call {
+    val api = service(instance)
+    fetchPages(maxPages = 2) { page -> api.getProjectEnvironments(projectId, page = page) }
+      .map { it.withDisplayTimes() }
+  }
 
   private companion object {
     val README_FILES = listOf("README.md", "README.markdown", "README.rst", "README.txt", "README", "readme.md")

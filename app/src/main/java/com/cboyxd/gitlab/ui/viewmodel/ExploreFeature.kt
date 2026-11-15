@@ -172,6 +172,15 @@ class ExploreFeature internal constructor(private val host: SessionHost) {
     val prefix = base.path.orEmpty().trimEnd('/')
     val path = uri.path.orEmpty().removePrefix(prefix).trim('/')
     if (path.isEmpty()) return false
+    if (path == "-/snippets") {
+      host.navigateTo(ScreenDestination.SnippetsList())
+      return true
+    }
+    if (path.startsWith("-/snippets/")) {
+      val snippetId = path.removePrefix("-/snippets/").substringBefore('/').toLongOrNull() ?: return false
+      host.navigateTo(ScreenDestination.SnippetDetail(snippetId))
+      return true
+    }
     val parts = path.split("/-/", limit = 2)
     val projectPath = parts[0]
     val rest = parts.getOrNull(1)?.split('/').orEmpty()
@@ -193,6 +202,12 @@ class ExploreFeature internal constructor(private val host: SessionHost) {
       "jobs" -> arg?.toLongOrNull()?.let { jid -> withProject(url, projectPath) { host.navigateTo(ScreenDestination.JobDetail(it, jid)) } } ?: false
       "commit" -> arg?.let { sha -> withProject(url, projectPath) { host.navigateTo(ScreenDestination.CommitDetail(it, sha)) } } ?: false
       "releases" -> arg?.let { tag -> withProject(url, projectPath) { host.navigateTo(ScreenDestination.ReleaseDetail(it, Uri.decode(tag))) } } ?: false
+      "environments" -> withProject(url, projectPath) { host.navigateTo(ScreenDestination.ProjectSectionList(it, ProjectSection.ENVIRONMENTS)) }
+      "snippets" -> {
+        val snippetId = arg?.toLongOrNull()
+        if (snippetId != null) withProject(url, projectPath) { host.navigateTo(ScreenDestination.SnippetDetail(snippetId, it)) }
+        else withProject(url, projectPath) { host.navigateTo(ScreenDestination.SnippetsList(it)) }
+      }
       "blob" -> {
         // /-/blob/<ref>/<path>: refs with slashes are ambiguous; assume a single-segment ref.
         val ref = arg ?: return false
