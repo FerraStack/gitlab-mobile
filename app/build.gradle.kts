@@ -13,8 +13,8 @@ android {
     applicationId = "com.cboyxd.gitlab"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.4.0"
+    versionCode = 6
+    versionName = "1.5.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     // The GitHub build may ask Android directly to stop optimizing the app's battery use. A

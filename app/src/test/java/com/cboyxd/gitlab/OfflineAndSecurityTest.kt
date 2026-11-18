@@ -64,6 +64,7 @@ class OfflineAndSecurityTest {
   @Before
   fun setUp() {
     app = ApplicationProvider.getApplicationContext()
+    app.online.value = true
     cacheDir = File(app.cacheDir, "test_http_cache_${System.nanoTime()}").apply { mkdirs() }
     val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
     val certificates = HandshakeCertificates.Builder()
@@ -88,6 +89,7 @@ class OfflineAndSecurityTest {
 
   @After
   fun tearDown() {
+    app.online.value = true
     GitLabApiClient.clientOverride = null
     GitLabApiClient.configureCache(app.cacheDir.resolve("http_cache")) { app.online.value }
     cacheDir.deleteRecursively()
