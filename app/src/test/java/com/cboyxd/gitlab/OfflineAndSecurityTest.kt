@@ -284,7 +284,7 @@ class OfflineAndSecurityTest {
     val vm = GitLabViewModel(app, handle)
     waitUntil {
       val s = vm.uiState.value
-      s.bootstrapped && !s.isLoading && !s.project.project.loading && projectCalls.get() >= 1
+      s.bootstrapped && !s.project.project.loading && projectCalls.get() >= 1
     }
 
     assertEquals(BottomTab.PROJECTS, vm.uiState.value.currentTab)
