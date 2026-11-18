@@ -1,5 +1,6 @@
 package com.cboyxd.gitlab
 
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -70,6 +71,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import org.robolectric.annotation.GraphicsMode
@@ -150,6 +152,27 @@ class TabletScreenshotTest {
       },
     )[GitLabViewModel::class.java]
 
+  private fun awaitCondition(
+    timeoutMs: Long = 15_000L,
+    onTimeout: () -> String = { "Timed out waiting for condition after $timeoutMs ms" },
+    predicate: () -> Boolean,
+  ) {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      shadowOf(Looper.getMainLooper()).idle()
+      if (predicate()) {
+        rule.waitForIdle()
+        return
+      }
+      Thread.sleep(10)
+    }
+    shadowOf(Looper.getMainLooper()).idle()
+    if (!predicate()) {
+      throw AssertionError(onTimeout())
+    }
+    rule.waitForIdle()
+  }
+
   private fun capture(name: String, dark: Boolean, content: @Composable () -> Unit) {
     rule.setContent { GitLabTheme(darkTheme = dark, reducedMotion = true, content = content) }
     rule.waitForIdle()
@@ -174,7 +197,9 @@ class TabletScreenshotTest {
         MainScreen(viewModel = vm, onExit = {})
       }
     }
-    rule.waitUntil(timeoutMillis = 15_000) { vm.uiState.value.bootstrapped }
+    awaitCondition(onTimeout = { "Timed out waiting for bootstrap: ${vm.uiState.value}" }) {
+      vm.uiState.value.bootstrapped
+    }
     rule.onNodeWithTag("main_nav_rail").assertIsDisplayed()
     rule.onNodeWithTag("main_bottom_nav").assertDoesNotExist()
 
@@ -202,21 +227,43 @@ class TabletScreenshotTest {
         MainScreen(viewModel = vm, onExit = {})
       }
     }
-    rule.waitUntil(timeoutMillis = 15_000) {
+    awaitCondition(
+      onTimeout = {
+        val s = vm.uiState.value
+        "Issues did not load: bootstrapped=${s.bootstrapped}, storageError=${s.storageError}, " +
+          "instance=${s.activeInstance?.name}(tokenBlank=${s.activeInstance?.token.isNullOrBlank()}), " +
+          "issues=(loading=${s.issues.loading}, loaded=${s.issues.loaded}, size=${s.issues.data.size}, error=${s.issues.error}), " +
+          "serverRequests=${server.requestCount}"
+      },
+    ) {
       val s = vm.uiState.value
+      if (s.bootstrapped && s.storageError != null) {
+        throw AssertionError("Bootstrap storage error: ${s.storageError}")
+      }
       if (s.bootstrapped && !s.issues.loading && s.issues.error != null) {
         throw AssertionError("Issues failed to load: ${s.issues.error}")
       }
       s.bootstrapped && s.issues.data.isNotEmpty()
     }
     rule.runOnUiThread { vm.navigateTo(ScreenDestination.IssuesList) }
-    rule.waitUntil(timeoutMillis = 15_000) {
+    awaitCondition(
+      onTimeout = {
+        val s = vm.uiState.value
+        "Issue row not rendered: dest=${s.destination}, pending=${s.pendingDestination}, issues=${s.issues.data.map { it.title }}"
+      },
+    ) {
       rule.onAllNodesWithText("Launch button does nothing on tablets").fetchSemanticsNodes().isNotEmpty()
     }
     rule.onNodeWithText("Select an issue").assertIsDisplayed()
 
     rule.onNodeWithText("Launch button does nothing on tablets").performClick()
-    rule.waitUntil(timeoutMillis = 15_000) {
+    awaitCondition(
+      onTimeout = {
+        val d = vm.uiState.value.issueDetail
+        "Issue detail note not rendered: projectId=${d.projectId}, iid=${d.iid}, " +
+          "issueError=${d.issue.error}, notes=(loading=${d.notes.loading}, loaded=${d.notes.loaded}, size=${d.notes.data.size}, error=${d.notes.error})"
+      },
+    ) {
       rule.onAllNodesWithText("Confirmed in two-pane view.").fetchSemanticsNodes().isNotEmpty()
     }
     rule.onNode(hasTestTag("two_pane_detail").and(hasAnyDescendant(hasText("Confirmed in two-pane view."))))
