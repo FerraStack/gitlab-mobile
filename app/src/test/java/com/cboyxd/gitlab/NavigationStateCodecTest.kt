@@ -57,7 +57,8 @@ class NavigationStateCodecTest {
       ScreenDestination.JobDetail(projectId = 12L, jobId = 888L),
       ScreenDestination.ReleaseDetail(projectId = 12L, tagName = "v1.4.0"),
       ScreenDestination.UserDetail(userId = 55L, username = "tanuki"),
-      ScreenDestination.Search,
+      ScreenDestination.Search(),
+      ScreenDestination.Search(projectId = 42L, projectName = "Rocket"),
       ScreenDestination.IssueDetail(projectId = 12L, iid = 3L),
       ScreenDestination.MergeRequestDetail(projectId = 12L, iid = 9L),
     )

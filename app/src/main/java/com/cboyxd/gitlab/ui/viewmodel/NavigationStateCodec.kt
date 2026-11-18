@@ -125,7 +125,11 @@ internal object NavigationStateCodec {
         obj.put("userId", dest.userId)
         obj.put("username", dest.username)
       }
-      ScreenDestination.Search -> obj.put("type", "Search")
+      is ScreenDestination.Search -> {
+        obj.put("type", "Search")
+        dest.projectId?.let { obj.put("projectId", it) }
+        dest.projectName?.let { obj.put("projectName", it) }
+      }
       is ScreenDestination.IssueDetail -> {
         obj.put("type", "IssueDetail")
         obj.put("projectId", dest.projectId)
@@ -202,7 +206,10 @@ internal object NavigationStateCodec {
         userId = obj.optLong("userId"),
         username = obj.optString("username", ""),
       )
-      "Search" -> ScreenDestination.Search
+      "Search" -> ScreenDestination.Search(
+        projectId = if (obj.has("projectId")) obj.optLong("projectId") else null,
+        projectName = if (obj.has("projectName")) obj.optString("projectName") else null,
+      )
       "IssueDetail" -> ScreenDestination.IssueDetail(
         projectId = obj.optLong("projectId"),
         iid = obj.optLong("iid"),
