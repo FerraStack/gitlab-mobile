@@ -246,7 +246,7 @@ class GitLabViewModelTest {
   @Test
   fun `switchInstance resets navigation, clears previous session data, and loads new server`() {
     val vm = createBootstrappedViewModel()
-    vm.navigateTo(ScreenDestination.Search)
+    vm.navigateTo(ScreenDestination.Search())
     vm.switchTab(BottomTab.PROJECTS)
     assertEquals(1L, vm.uiState.value.projects.data.single().id)
 
