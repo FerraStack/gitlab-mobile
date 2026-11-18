@@ -22,19 +22,29 @@ for attempt in 1 2 3 4 5; do
   git init -q "$work/pub"
   cd "$work/pub"
   git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+  head=""
   if git fetch -q --depth 1 origin ci-screenshots 2>/dev/null; then
+    head=$(git rev-parse FETCH_HEAD)
     git checkout -q -b ci-screenshots FETCH_HEAD
   else
     git checkout -q --orphan ci-screenshots
   fi
+  git rm -rfq --ignore-unmatch "pr-$PR" || rm -rf "pr-$PR"
   mkdir -p "$dir"
   find "$shots" -name '*.png' -exec cp {} "$dir"/ \;
-  git add -A
-  git -c user.name="github-actions[bot]" \
+  git add -A "pr-$PR"
+  tree=$(git write-tree)
+  commit=$(git -c user.name="github-actions[bot]" \
     -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-    commit -qm "Screenshots for PR #$PR (run $RUN_ID, attempt $RUN_ATTEMPT)"
-  if git push -q origin ci-screenshots; then
-    break
+    commit-tree "$tree" -m "Screenshots for PR #$PR (run $RUN_ID, attempt $RUN_ATTEMPT)")
+  if [[ -n $head ]]; then
+    if git push -q --force-with-lease="ci-screenshots:$head" origin "$commit:refs/heads/ci-screenshots"; then
+      break
+    fi
+  else
+    if git push -q origin "$commit:refs/heads/ci-screenshots"; then
+      break
+    fi
   fi
   if [[ $attempt == 5 ]]; then
     echo "::error::Could not push to ci-screenshots"

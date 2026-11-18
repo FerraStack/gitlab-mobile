@@ -261,6 +261,7 @@ class OfflineAndSecurityTest {
             projectCalls.incrementAndGet()
             MockResponse().setBody("""{"id":12,"name":"rocket","name_with_namespace":"Org / rocket","path_with_namespace":"org/rocket","default_branch":"main","web_url":"https://gitlab.com/org/rocket"}""")
           }
+          request.requestUrl?.encodedPath == "/api/v4/projects/12/languages" -> MockResponse().setBody("{}")
           path.startsWith("/api/v4/projects/12") -> MockResponse().setBody("[]")
           else -> MockResponse().setBody("[]")
         }
@@ -281,7 +282,10 @@ class OfflineAndSecurityTest {
     val handle = SavedStateHandle(mapOf(GitLabViewModel.KEY_NAV_STATE to navJson))
 
     val vm = GitLabViewModel(app, handle)
-    waitUntil { vm.uiState.value.bootstrapped && projectCalls.get() >= 1 }
+    waitUntil {
+      val s = vm.uiState.value
+      s.bootstrapped && !s.project.project.loading && projectCalls.get() >= 1
+    }
 
     assertEquals(BottomTab.PROJECTS, vm.uiState.value.currentTab)
     assertEquals(ScreenDestination.ProjectDetail(12L), vm.uiState.value.destination)
@@ -306,11 +310,14 @@ class OfflineAndSecurityTest {
     }
 
     var capturedMessage: UiMessage? = null
+    val subscribedLatch = CountDownLatch(1)
     val msgLatch = CountDownLatch(1)
-    val collectorJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+    val collectorJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined).launch {
+      subscribedLatch.countDown()
       capturedMessage = vm.messages.first { it.isError }
       msgLatch.countDown()
     }
+    assertTrue(subscribedLatch.await(2, TimeUnit.SECONDS))
     vm.toggleProjectStar(12L)
     waitUntil { msgLatch.count == 0L }
     collectorJob.cancel()
