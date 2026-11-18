@@ -25,7 +25,7 @@ internal interface SessionHost {
   suspend fun <T> api(block: suspend (GitLabInstance) -> Result<T>): Result<T>
 
   fun notify(text: String)
-  fun notifyError(text: String)
+  fun notifyError(text: String, retryAction: (() -> Unit)? = null)
   fun navigateTo(destination: ScreenDestination)
   fun openExternal(url: String)
 }

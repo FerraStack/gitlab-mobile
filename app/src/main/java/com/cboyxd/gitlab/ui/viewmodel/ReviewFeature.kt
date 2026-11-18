@@ -39,7 +39,7 @@ class ReviewFeature internal constructor(
     labels(projectId)
     host.state.update { s ->
       val seeded: Loadable<GitLabMergeRequest?> = s.mergeRequestDetail.takeIf { it.projectId == projectId && it.iid == iid }?.mergeRequest
-        ?: (s.mergeRequests.data + s.project.mergeRequests.data).firstOrNull { it.projectId == projectId && it.iid == iid }
+        ?: (s.mergeRequests.data + s.project.mergeRequests.data + s.recentMergeRequests).firstOrNull { it.projectId == projectId && it.iid == iid }
           ?.let { Loadable<GitLabMergeRequest?>(it, loaded = true) }
         ?: Loadable(null)
       s.copy(
@@ -140,7 +140,7 @@ class ReviewFeature internal constructor(
         },
         onFailure = { error ->
           apply(mr.projectId, mr.iid) { it.copy(busy = false) }
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { setClosed(closed) }
         }
       )
     }
@@ -158,7 +158,7 @@ class ReviewFeature internal constructor(
         },
         onFailure = { error ->
           apply(mr.projectId, mr.iid) { it.copy(busy = false) }
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { merge(options) }
         }
       )
     }
@@ -176,7 +176,7 @@ class ReviewFeature internal constructor(
         },
         onFailure = { error ->
           apply(mr.projectId, mr.iid) { it.copy(busy = false) }
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { markReady() }
         },
       )
     }
@@ -191,7 +191,7 @@ class ReviewFeature internal constructor(
       val started = host.api { host.repository.rebaseMergeRequest(it, mr) }
       started.exceptionOrNull()?.let { error ->
         apply(mr.projectId, mr.iid) { it.copy(busy = false) }
-        host.notifyError(error.userMessage())
+        host.notifyError(error.userMessage()) { rebase() }
         return@launch
       }
       host.notify("Rebasing !${mr.iid} onto ${mr.targetBranch}…")
@@ -213,7 +213,7 @@ class ReviewFeature internal constructor(
         },
         onFailure = { error ->
           apply(mr.projectId, mr.iid) { it.copy(busy = false) }
-          host.notifyError(error.userMessage())
+          host.notifyError(error.userMessage()) { cancelAutoMerge() }
         },
       )
     }
@@ -315,7 +315,7 @@ class ReviewFeature internal constructor(
         )
       }
       result.exceptionOrNull()?.let {
-        host.notifyError(it.userMessage())
+        host.notifyError(it.userMessage()) { setResolved(discussionId, resolved) }
         return@launch
       }
       host.api { repo.getMergeRequest(it, mr.projectId, mr.iid) }.getOrNull()?.let { fresh ->
@@ -363,7 +363,7 @@ class ReviewFeature internal constructor(
       val result = host.api { if (approve) repo.approveMergeRequest(it, mr).map { } else repo.unapproveMergeRequest(it, mr) }
       result.onFailure { error ->
         apply(mr.projectId, mr.iid) { it.copy(busy = false) }
-        host.notifyError(error.userMessage())
+        host.notifyError(error.userMessage()) { setApproved(approve) }
         return@launch
       }
       val approvals = host.api { repo.getMergeRequestApprovals(it, mr.projectId, mr.iid) }

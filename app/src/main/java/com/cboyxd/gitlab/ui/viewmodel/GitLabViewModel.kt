@@ -4,7 +4,9 @@ import android.app.Application
 import android.content.ActivityNotFoundException
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import com.cboyxd.gitlab.GitLabApplication
 import com.cboyxd.gitlab.data.api.GitLabApiClient
 import com.cboyxd.gitlab.data.api.GitLabApiException
 import com.cboyxd.gitlab.data.api.formatGitLabTime
@@ -25,7 +27,12 @@ import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabProject
 import com.cboyxd.gitlab.data.model.GitLabTodo
 import com.cboyxd.gitlab.data.repository.GitLabRepository
+import com.cboyxd.gitlab.data.storage.AppLockPolicy
+import com.cboyxd.gitlab.data.storage.AppPreferencesStore
+import com.cboyxd.gitlab.data.storage.DashboardSnapshot
 import com.cboyxd.gitlab.data.storage.InstanceStore
+import com.cboyxd.gitlab.data.storage.OfflineSnapshotStore
+import com.cboyxd.gitlab.data.storage.SecurityPreferences
 import com.cboyxd.gitlab.notifications.GitLabNotifications
 import com.cboyxd.gitlab.notifications.NotificationStore
 import kotlinx.coroutines.CancellationException
@@ -40,11 +47,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
@@ -62,10 +71,22 @@ import kotlinx.coroutines.withContext
  * in the new one's state. Storage (Keystore + SharedPreferences) only runs on [Dispatchers.IO].
  * State updates never suspend: values are computed first, then written with a pure `update {}`.
  */
-class GitLabViewModel(application: Application) : AndroidViewModel(application) {
+class GitLabViewModel(
+  application: Application,
+  private val savedStateHandle: SavedStateHandle = SavedStateHandle(),
+) : AndroidViewModel(application) {
 
   private val store = InstanceStore.get(application)
+  private val snapshotStore = OfflineSnapshotStore(application)
+  private val prefsStore = AppPreferencesStore.get(application)
   private val repository = GitLabRepository()
+
+  val securityPreferences: StateFlow<SecurityPreferences> = prefsStore.preferences
+  private val _appLocked = MutableStateFlow(prefsStore.preferences.value.appLockEnabled)
+  val appLocked: StateFlow<Boolean> = _appLocked.asStateFlow()
+  private var backgroundedAtMs: Long = 0L
+  private var firstForeground: Boolean = true
+  private var wasOffline: Boolean = false
 
   private val _uiState = MutableStateFlow(GitLabUiState())
   val uiState: StateFlow<GitLabUiState> = _uiState.asStateFlow()
@@ -92,6 +113,36 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   private var pendingMarkAllIds: Set<String> = emptySet()
   internal var todoUndoDelayMs: Long = 5_000L
 
+  fun onAppForegrounded(nowMs: Long = System.currentTimeMillis()) {
+    val prefs = prefsStore.preferences.value
+    val isInitial = firstForeground
+    firstForeground = false
+    if (AppLockPolicy.shouldLock(prefs.appLockEnabled, backgroundedAtMs, nowMs, prefs.lockTimeout, isInitial)) {
+      _appLocked.value = true
+    }
+    backgroundedAtMs = 0L
+  }
+
+  fun onAppBackgrounded(nowMs: Long = System.currentTimeMillis()) {
+    if (backgroundedAtMs == 0L) {
+      backgroundedAtMs = nowMs
+    }
+  }
+
+  fun unlockApp() {
+    _appLocked.value = false
+    backgroundedAtMs = 0L
+  }
+
+  internal fun onConnectivityChanged(online: Boolean) {
+    val reconnected = wasOffline && online
+    wasOffline = !online
+    _uiState.update { it.copy(isOffline = !online) }
+    if (reconnected) {
+      refreshActiveScreen()
+    }
+  }
+
   private val host = object : SessionHost {
     override val repository: GitLabRepository get() = this@GitLabViewModel.repository
     override val session: CoroutineScope get() = this@GitLabViewModel.session
@@ -101,8 +152,8 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     override fun notify(text: String) {
       this@GitLabViewModel.notify(text)
     }
-    override fun notifyError(text: String) {
-      this@GitLabViewModel.notifyError(text)
+    override fun notifyError(text: String, retryAction: (() -> Unit)?) {
+      this@GitLabViewModel.notifyError(text, retryAction)
     }
     override fun navigateTo(destination: ScreenDestination) {
       this@GitLabViewModel.navigateTo(destination)
@@ -124,11 +175,39 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   /** Groups, people, search and in-app links. */
   val explore = ExploreFeature(host)
 
+  /** Personal and project snippets. */
+  val snippet = SnippetFeature(host)
+
   private var passwordLogin: GitLabPasswordLogin? = null
   private var pendingServerName: String = ""
   private var pendingServerUrl: String = ""
 
   init {
+    val app = getApplication<Application>() as? GitLabApplication
+    if (app != null) {
+      wasOffline = !app.online.value
+      _uiState.update { it.copy(isOffline = wasOffline) }
+      viewModelScope.launch {
+        app.online.collect { online -> onConnectivityChanged(online) }
+      }
+    }
+    viewModelScope.launch {
+      prefsStore.preferences.collect { prefs ->
+        if (!prefs.appLockEnabled) _appLocked.value = false
+      }
+    }
+    viewModelScope.launch {
+      uiState.map { it.mergeRequestDetail.mergeRequest.data }.distinctUntilChanged().collect { mr ->
+        val instanceId = _uiState.value.activeInstance?.id ?: return@collect
+        if (mr != null && !_uiState.value.isOffline) {
+          _uiState.update { s ->
+            val updated = (listOf(mr) + s.recentMergeRequests.filterNot { it.projectId == mr.projectId && it.iid == mr.iid }).take(15)
+            s.copy(recentMergeRequests = updated)
+          }
+          withContext(Dispatchers.IO) { snapshotStore.recordRecentMergeRequest(instanceId, mr) }
+        }
+      }
+    }
     bootstrap()
   }
 
@@ -150,15 +229,68 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     review.reset()
     ci.reset()
     explore.reset()
+    snippet.reset()
+  }
+
+  private fun persistNavState(state: GitLabUiState = _uiState.value) {
+    val instanceId = state.activeInstance?.id ?: return
+    savedStateHandle[KEY_NAV_STATE] = NavigationStateCodec.encode(
+      PersistedNavState(
+        instanceId = instanceId,
+        tab = state.currentTab,
+        backStack = state.backStack,
+      )
+    )
+  }
+
+  private fun GitLabUiState.withSnapshot(snapshot: DashboardSnapshot?): GitLabUiState {
+    if (snapshot == null) return this
+    return copy(
+      offlineSnapshotSavedAtMs = snapshot.savedAtMs,
+      currentUser = if (snapshot.currentUser != null) Loadable(snapshot.currentUser, loaded = true) else currentUser,
+      userStatus = snapshot.userStatus ?: userStatus,
+      profileReadme = snapshot.profileReadme ?: profileReadme,
+      projects = Loadable(snapshot.projects, loaded = true),
+      groups = Loadable(snapshot.groups, loaded = true),
+      issues = Loadable(snapshot.issues, loaded = true),
+      mergeRequests = Loadable(snapshot.mergeRequests, loaded = true),
+      pipelines = Loadable(snapshot.pipelines, loaded = true),
+      notifications = Loadable(snapshot.notifications, loaded = true),
+      activity = Loadable(snapshot.activity, loaded = true),
+      recentIssues = snapshot.recentIssues,
+      recentMergeRequests = snapshot.recentMergeRequests,
+    )
   }
 
   private fun bootstrap() {
     viewModelScope.launch {
-      val loaded = runStorage { Triple(store.getInstances(), store.getActiveInstance(), store.getGitLabComClientId()) }
+      val loaded = runStorage {
+        val instances = store.getInstances()
+        val active = store.getActiveInstance()
+        val clientId = store.getGitLabComClientId()
+        val effective = active ?: GitLabAuth.GUEST
+        val snapshot = snapshotStore.read(effective.id)
+        BootstrapData(instances, effective, clientId, snapshot)
+      }
       loaded.fold(
-        onSuccess = { (instances, active, clientId) ->
+        onSuccess = { (instances, effective, clientId, snapshot) ->
+          val restored = NavigationStateCodec.decode(savedStateHandle.get<String>(KEY_NAV_STATE))
+            ?.takeIf { it.instanceId == effective.id }
           _uiState.update {
-            it.copy(bootstrapped = true, savedInstances = instances, activeInstance = active ?: GitLabAuth.GUEST, gitLabComClientId = clientId, storageError = null)
+            it.copy(
+              bootstrapped = true,
+              savedInstances = instances,
+              activeInstance = effective,
+              gitLabComClientId = clientId,
+              storageError = null,
+              currentTab = restored?.tab ?: BottomTab.HOME,
+              backStack = restored?.backStack.orEmpty(),
+            ).withSnapshot(snapshot)
+          }
+          val top = restored?.backStack?.lastOrNull()
+          if (top != null) {
+            ci.onDestinationChanged(top)
+            load(top, force = true)
           }
           refreshDashboard()
         },
@@ -169,6 +301,13 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  private data class BootstrapData(
+    val instances: List<GitLabInstance>,
+    val active: GitLabInstance,
+    val clientId: String,
+    val snapshot: DashboardSnapshot?,
+  )
+
   fun retryBootstrap() {
     _uiState.update { it.copy(bootstrapped = false, storageError = null) }
     bootstrap()
@@ -177,7 +316,12 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   /** Recovery when saved accounts can't be decrypted: forget them and start as a guest. */
   fun resetSavedAccounts() {
     viewModelScope.launch {
-      runStorage { store.resetAll() }
+      runStorage {
+        store.resetAll()
+        snapshotStore.clearAll()
+        GitLabApiClient.clearDiskCache()
+      }
+      savedStateHandle.remove<String>(KEY_NAV_STATE)
       retryBootstrap()
     }
   }
@@ -189,6 +333,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
   fun switchTab(tab: BottomTab) {
     navigationJob?.cancel()
     _uiState.update { it.copy(currentTab = tab, backStack = emptyList(), pendingDestination = null) }
+    persistNavState()
     ci.onDestinationChanged(ScreenDestination.MainTabs)
   }
 
@@ -196,6 +341,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     navigationJob?.cancel()
     if (destination == ScreenDestination.MainTabs) {
       _uiState.update { it.copy(backStack = emptyList(), pendingDestination = null) }
+      persistNavState()
       ci.onDestinationChanged(destination)
       return
     }
@@ -211,6 +357,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       _uiState.update {
         if (it.pendingDestination == destination) it.copy(backStack = it.backStack + destination, pendingDestination = null) else it
       }
+      persistNavState()
     }
   }
 
@@ -224,6 +371,8 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         ProjectSection.ISSUES -> p.issues
         ProjectSection.MERGE_REQUESTS -> p.mergeRequests
         ProjectSection.PIPELINES -> p.pipelines
+        ProjectSection.ENVIRONMENTS -> p.environments
+        ProjectSection.CI_VARIABLES -> p.ciVariables
         ProjectSection.COMMITS -> p.commits
         ProjectSection.BRANCHES -> p.branches
         ProjectSection.TAGS -> p.tags
@@ -232,6 +381,8 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         ProjectSection.ACTIVITY -> p.events
       })
       is ScreenDestination.ReleaseDetail -> p.project.error != null || ready(p.releases)
+      is ScreenDestination.SnippetsList -> ready(s.snippets.items)
+      is ScreenDestination.SnippetDetail -> ready(s.snippetDetail.snippet, s.snippetDetail.rawContent)
       is ScreenDestination.FileViewer -> ready(s.file.content)
       is ScreenDestination.CommitDetail -> ready(s.commitDetail.commit, s.commitDetail.diffs)
       is ScreenDestination.PipelineDetail -> ready(s.pipelineDetail.pipeline, s.pipelineDetail.jobs)
@@ -268,8 +419,24 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     navigationJob = session.launch {
       _uiState.first { readyToOpen(it, next) }
       _uiState.update { if (it.pendingDestination == next) it.copy(backStack = remaining, pendingDestination = null) else it }
+      persistNavState()
     }
     return true
+  }
+
+  /** Refreshes the currently visible screen (for instance, right after reconnecting). */
+  fun refreshActiveScreen() {
+    val state = _uiState.value
+    if (!state.bootstrapped) return
+    when (val current = state.destination) {
+      ScreenDestination.MainTabs,
+      ScreenDestination.IssuesList,
+      ScreenDestination.MergeRequestsList,
+      ScreenDestination.PipelinesList,
+      ScreenDestination.GroupsList,
+      ScreenDestination.UserProfile -> refreshDashboard(userInitiated = false)
+      else -> load(current, force = true)
+    }
   }
 
   /** Loads what a destination shows, unless it already holds that entity. */
@@ -292,10 +459,16 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         // Entering a list shows what's cached and refreshes it; coming back to it keeps it as it was.
         code.loadSection(destination.section, force = force)
       }
+      is ScreenDestination.RunPipeline ->
+        if (force || !projectLoaded(destination.projectId)) code.open(destination.projectId)
       is ScreenDestination.ReleaseDetail -> {
         if (!projectLoaded(destination.projectId)) code.open(destination.projectId)
         code.loadSection(ProjectSection.RELEASES)
       }
+      is ScreenDestination.SnippetsList ->
+        snippet.loadList(destination.projectId, force = force)
+      is ScreenDestination.SnippetDetail ->
+        snippet.loadDetail(destination.snippetId, destination.projectId, force = force)
       is ScreenDestination.FileViewer -> {
         val snippetId = destination.snippetId
         if (snippetId != null) {
@@ -374,12 +547,14 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     }
     dashboardJob = session.launch {
       var reachedServer = false
+      var anyFeedSucceeded = false
       var authFailed = false
       coroutineScope {
         launch {
           api { repository.getCurrentUser(it) }.fold(
             onSuccess = { user ->
               reachedServer = true
+              anyFeedSucceeded = true
               _uiState.update { s -> s.copy(currentUser = s.currentUser.success(user)) }
               if (user != null) loadProfileExtras(user.username)
             },
@@ -394,6 +569,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
           projects.fold(
             onSuccess = { list ->
               reachedServer = true
+              anyFeedSucceeded = true
               _uiState.update { s -> s.copy(projects = s.projects.success(list)) }
             },
             onFailure = { error -> _uiState.update { s -> s.copy(projects = s.projects.failure(error.userMessage())) } }
@@ -409,13 +585,19 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         }
         launch {
           api { repository.getMyIssuesPage(it) }.fold(
-            onSuccess = { slice -> _uiState.update { s -> s.copy(issues = s.issues.success(slice.items), issuesTruncated = slice.truncated) } },
+            onSuccess = { slice ->
+              anyFeedSucceeded = true
+              _uiState.update { s -> s.copy(issues = s.issues.success(slice.items), issuesTruncated = slice.truncated) }
+            },
             onFailure = { error -> _uiState.update { s -> s.copy(issues = s.issues.failure(error.userMessage())) } }
           )
         }
         launch {
           api { repository.getMyMergeRequestsPage(it) }.fold(
-            onSuccess = { slice -> _uiState.update { s -> s.copy(mergeRequests = s.mergeRequests.success(slice.items), mergeRequestsTruncated = slice.truncated) } },
+            onSuccess = { slice ->
+              anyFeedSucceeded = true
+              _uiState.update { s -> s.copy(mergeRequests = s.mergeRequests.success(slice.items), mergeRequestsTruncated = slice.truncated) }
+            },
             onFailure = { error -> _uiState.update { s -> s.copy(mergeRequests = s.mergeRequests.failure(error.userMessage())) } }
           )
         }
@@ -432,6 +614,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
             )
           }.fold(
             onSuccess = { list ->
+              anyFeedSucceeded = true
               val mapped = mapTodosWithPendingUndo(list)
               _uiState.update { s -> s.copy(notifications = s.notifications.success(mapped)) }
             },
@@ -446,12 +629,35 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         }
         launch {
           api { repository.getGroups(it) }.fold(
-            onSuccess = { list -> _uiState.update { s -> s.copy(groups = s.groups.success(list)) } },
+            onSuccess = { list ->
+              anyFeedSucceeded = true
+              _uiState.update { s -> s.copy(groups = s.groups.success(list)) }
+            },
             onFailure = { error -> _uiState.update { s -> s.copy(groups = s.groups.failure(error.userMessage())) } }
           )
         }
       }
       _uiState.update { it.copy(refreshing = false) }
+      if (anyFeedSucceeded) {
+        val snap = _uiState.value
+        val snapshot = DashboardSnapshot(
+          savedAtMs = System.currentTimeMillis(),
+          currentUser = snap.currentUser.data,
+          userStatus = snap.userStatus,
+          profileReadme = snap.profileReadme,
+          projects = snap.projects.data.take(50),
+          groups = snap.groups.data.take(50),
+          issues = snap.issues.data.take(50),
+          mergeRequests = snap.mergeRequests.data.take(50),
+          pipelines = snap.pipelines.data.take(30),
+          notifications = snap.notifications.data.take(50),
+          activity = snap.activity.data.take(50),
+          recentIssues = snap.recentIssues,
+          recentMergeRequests = snap.recentMergeRequests,
+        )
+        withContext(Dispatchers.IO) { snapshotStore.write(instance.id, snapshot) }
+        _uiState.update { it.copy(offlineSnapshotSavedAtMs = snapshot.savedAtMs) }
+      }
       val user = _uiState.value.currentUser.data
       persistServerMeta(instance.id, username = user?.username, reachable = reachedServer, authFailed = authFailed)
     }
@@ -496,6 +702,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     pendingDestination = null,
     refreshing = false,
     sessionExpired = false,
+    offlineSnapshotSavedAtMs = null,
     currentUser = Loadable(null),
     userStatus = null,
     profileReadme = null,
@@ -520,6 +727,8 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     jobDetail = JobDetailState(),
     userDetail = UserDetailState(),
     search = SearchState(),
+    snippets = SnippetsState(),
+    snippetDetail = SnippetDetailState(),
     labels = emptyMap(),
     projectMembers = emptyMap(),
     projectMilestones = emptyMap(),
@@ -529,6 +738,8 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     file = FileState(),
     issueDetail = IssueDetailState(),
     mergeRequestDetail = MergeRequestDetailState(),
+    recentIssues = emptyList(),
+    recentMergeRequests = emptyList(),
   )
 
   // -------------------------------------------------------------------------------------------
@@ -541,15 +752,21 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     _uiState.update { clearedSessionState(it).copy(backStack = emptyList(), currentTab = BottomTab.HOME) }
     viewModelScope.launch {
       runStorage {
+        GitLabApiClient.clearDiskCache()
         store.setActiveInstance(instanceId)
-        store.getInstances() to store.getActiveInstance()
+        val instances = store.getInstances()
+        val active = store.getActiveInstance()
+        val snapshot = snapshotStore.read((active ?: GitLabAuth.GUEST).id)
+        Triple(instances, active, snapshot)
       }.fold(
-        onSuccess = { (instances, active) ->
+        onSuccess = { (instances, active, snapshot) ->
           publishInstances(instances, active)
+          _uiState.update { it.withSnapshot(snapshot) }
+          persistNavState()
           active?.let { notify("Switched to ${it.name}") }
           refreshDashboard()
         },
-        onFailure = { error -> notifyError(error.message ?: "Unable to switch accounts.") }
+        onFailure = { error -> notifyError(error.message ?: "Unable to switch accounts.") { switchInstance(instanceId) } }
       )
     }
   }
@@ -561,20 +778,28 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     val wasActive = _uiState.value.activeInstance?.id == instanceId
     if (wasActive) {
       resetSession()
-      _uiState.update { clearedSessionState(it) }
+      _uiState.update { clearedSessionState(it).copy(backStack = emptyList(), currentTab = BottomTab.HOME) }
     }
     GitLabApiClient.forget(instanceId)
     GitLabNotifications.clearAuthFailure(getApplication(), instanceId)
     viewModelScope.launch {
       runStorage {
+        GitLabApiClient.clearDiskCache()
         val removed = store.getInstances().firstOrNull { it.id == instanceId } ?: snapshot
         val clientId = fallbackClientId.ifBlank { store.getGitLabComClientId() }
+        snapshotStore.delete(instanceId)
         store.deleteInstance(instanceId)
-        Triple(removed, store.getInstances(), store.getActiveInstance() to clientId)
+        val instances = store.getInstances()
+        val active = store.getActiveInstance()
+        val cachedSnapshot = if (wasActive) snapshotStore.read((active ?: GitLabAuth.GUEST).id) else null
+        DeletedAccountResult(removed, instances, active, clientId, cachedSnapshot)
       }.fold(
-        onSuccess = { (removed, instances, activeAndClient) ->
-          val (active, clientId) = activeAndClient
+        onSuccess = { (removed, instances, active, clientId, cachedSnapshot) ->
           publishInstances(instances, active)
+          if (wasActive) {
+            _uiState.update { it.withSnapshot(cachedSnapshot) }
+            persistNavState()
+          }
           notify("Account removed")
           if (wasActive) refreshDashboard()
           if (removed != null && removed.token.isNotBlank()) {
@@ -583,7 +808,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
             }
           }
         },
-        onFailure = { error -> notifyError(error.message ?: "Unable to remove the account.") }
+        onFailure = { error -> notifyError(error.message ?: "Unable to remove the account.") { deleteInstance(instanceId) } }
       )
     }
   }
@@ -768,6 +993,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
           passwordLogin = null
           val fallbackClientId = _uiState.value.gitLabComClientId
           val saved = runStorage {
+            GitLabApiClient.clearDiskCache()
             val candidate = draft.copy(username = probe.username, version = probe.version, statusOk = true, authFailure = false)
             val replaced = store.findExistingAccount(candidate)
             val added = store.addInstance(candidate)
@@ -794,6 +1020,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
                   currentTab = BottomTab.HOME,
                 )
               }
+              persistNavState()
               notify(if (added.token.isBlank()) "Connected to ${added.name} without signing in" else "Signed in to ${added.name}")
               refreshDashboard()
               if (replaced != null && replaced.token.isNotBlank() && replaced.token != added.token) {
@@ -932,7 +1159,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
             )
           }
         },
-        onFailure = { error -> notifyError(error.userMessage()) }
+        onFailure = { error -> notifyError(error.userMessage()) { toggleProjectStar(projectId) } }
       )
     }
   }
@@ -979,7 +1206,10 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     code.ensureLabels(projectId)
     issueJob?.cancel()
     if (!seeded) {
-      val known = _uiState.value.let { s -> (s.issues.data + s.project.issues.data).firstOrNull { it.projectId == projectId && it.iid == iid } }
+      val known = _uiState.value.let { s ->
+        (s.issues.data + s.project.issues.data + s.recentIssues)
+          .firstOrNull { it.projectId == projectId && it.iid == iid }
+      }
       _uiState.update { it.copy(issueDetail = IssueDetailState(projectId, iid, Loadable<GitLabIssue?>(known, loaded = known != null))) }
     }
     _uiState.update { s -> s.copy(issueDetail = s.issueDetail.copy(issue = s.issueDetail.issue.start(), notes = s.issueDetail.notes.start())) }
@@ -988,9 +1218,19 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         launch {
           api { repository.getIssue(it, projectId, iid) }.fold(
             onSuccess = { issue ->
+              var merged = issue
               updateIssueDetail(projectId, iid) { d ->
                 val known = d.issue.data?.labelDetails.orEmpty()
-                d.copy(issue = d.issue.success(issue.copy(labelDetails = issue.labelDetails.ifEmpty { known })))
+                merged = issue.copy(labelDetails = issue.labelDetails.ifEmpty { known })
+                d.copy(issue = d.issue.success(merged))
+              }
+              val instanceId = _uiState.value.activeInstance?.id
+              if (instanceId != null && !_uiState.value.isOffline) {
+                _uiState.update { s ->
+                  val updated = (listOf(merged) + s.recentIssues.filterNot { it.projectId == merged.projectId && it.iid == merged.iid }).take(15)
+                  s.copy(recentIssues = updated)
+                }
+                withContext(Dispatchers.IO) { snapshotStore.recordRecentIssue(instanceId, merged) }
               }
             },
             onFailure = { error -> updateIssueDetail(projectId, iid) { d -> d.copy(issue = d.issue.failure(error.userMessage())) } }
@@ -1052,6 +1292,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       s.copy(
         issues = s.issues.copy(data = s.issues.data.swap()),
         project = s.project.copy(issues = s.project.issues.copy(data = s.project.issues.data.swap())),
+        recentIssues = s.recentIssues.swap(),
         issueDetail = if (currentDetail.projectId == withColors.projectId && currentDetail.iid == withColors.iid) {
           currentDetail.copy(issue = currentDetail.issue.success(withColors), busy = false)
         } else currentDetail,
@@ -1091,7 +1332,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
         },
         onFailure = { error ->
           updateIssueDetail(issue.projectId, issue.iid) { it.copy(busy = false) }
-          notifyError(error.userMessage())
+          notifyError(error.userMessage()) { setIssueClosed(closed) }
         }
       )
     }
@@ -1268,7 +1509,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
           notify("Pipeline #${retried.id} restarted")
           if (_uiState.value.pipelineDetail.pipelineId == retried.id) ci.loadPipeline(retried.projectId, retried.id)
         },
-        onFailure = { error -> notifyError(error.userMessage()) }
+        onFailure = { error -> notifyError(error.userMessage()) { retryPipeline(pipeline) } }
       )
     }
   }
@@ -1280,7 +1521,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
           _uiState.update { it.copy(userStatus = status) }
           notify(if (message.isBlank()) "Status cleared" else "Status updated")
         },
-        onFailure = { error -> notifyError(error.userMessage()) }
+        onFailure = { error -> notifyError(error.userMessage()) { setUserStatus(message) } }
       )
     }
   }
@@ -1408,7 +1649,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
       pendingDone.remove(id)
       api { repository.markTodoDone(it, todoId) }.onFailure { error ->
         setNotificationUnread(id, true)
-        notifyError(error.userMessage())
+        notifyError(error.userMessage()) { markNotificationDone(id) }
       }
     }
     _messages.trySend(
@@ -1453,7 +1694,7 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
             if (it.id in committedIds) it.copy(isUnread = true) else it
           }))
         }
-        notifyError(error.userMessage())
+        notifyError(error.userMessage()) { markAllNotificationsDone() }
       }
     }
     _messages.trySend(
@@ -1501,8 +1742,19 @@ class GitLabViewModel(application: Application) : AndroidViewModel(application) 
     _messages.trySend(UiMessage(text))
   }
 
-  private fun notifyError(text: String, actionLabel: String? = null, action: (() -> Unit)? = null) {
-    _messages.trySend(UiMessage(text, isError = true, actionLabel = actionLabel, action = action))
+  private fun notifyError(text: String, retryAction: (() -> Unit)? = null) {
+    _messages.trySend(
+      UiMessage(
+        text = text,
+        isError = true,
+        actionLabel = if (retryAction != null) "Retry" else null,
+        action = retryAction,
+      )
+    )
+  }
+
+  companion object {
+    internal const val KEY_NAV_STATE = "nav_state"
   }
 }
 
@@ -1572,4 +1824,12 @@ private data class SavedAccountResult(
   val active: GitLabInstance?,
   val replaced: GitLabInstance?,
   val clientId: String,
+)
+
+private data class DeletedAccountResult(
+  val removed: GitLabInstance?,
+  val instances: List<GitLabInstance>,
+  val active: GitLabInstance?,
+  val clientId: String,
+  val snapshot: DashboardSnapshot?,
 )

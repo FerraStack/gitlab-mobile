@@ -662,11 +662,69 @@ data class GitLabAwardEmoji(
 )
 
 @JsonClass(generateAdapter = true)
+data class GitLabSnippetFile(
+  val path: String = "",
+  @Json(name = "raw_url") val rawUrl: String = "",
+)
+
+@JsonClass(generateAdapter = true)
 data class GitLabSnippet(
   val id: Long = 0,
   val title: String = "",
-  val description: String? = null,
   @Json(name = "file_name") val fileName: String = "",
+  val description: String? = null,
+  val visibility: String = "private",
+  @Json(name = "updated_at") val updatedAt: String = "",
+  @Json(name = "created_at") val createdAt: String = "",
+  @Json(name = "project_id") val projectId: Long? = null,
   @Json(name = "web_url") val webUrl: String = "",
+  @Json(name = "raw_url") val rawUrl: String = "",
   val author: GitLabUser = GitLabUser(),
+  val files: List<GitLabSnippetFile> = emptyList(),
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabCiVariable(
+  val key: String = "",
+  @Json(name = "variable_type") val variableType: String = "env_var",
+  val value: String? = null,
+  val protected: Boolean = false,
+  val masked: Boolean = false,
+  val raw: Boolean = false,
+  val hidden: Boolean = false,
+  @Json(name = "environment_scope") val environmentScope: String = "*",
+  val description: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabDeployable(
+  val id: Long = 0,
+  val name: String = "",
+  val status: String = "",
+  @Json(name = "web_url") val webUrl: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabDeployment(
+  val id: Long = 0,
+  val iid: Long = 0,
+  val ref: String = "",
+  val sha: String = "",
+  val status: String = "",
+  @Json(name = "created_at") val createdAt: String = "",
+  @Json(name = "updated_at") val updatedAt: String = "",
+  val user: GitLabUser? = null,
+  val deployable: GitLabDeployable? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class GitLabEnvironment(
+  val id: Long,
+  val name: String = "",
+  val slug: String = "",
+  @Json(name = "external_url") val externalUrl: String? = null,
+  val state: String = "",
+  val tier: String? = null,
+  @Json(name = "updated_at") val updatedAt: String? = null,
+  @Json(name = "last_deployment") val lastDeployment: GitLabDeployment? = null,
 )

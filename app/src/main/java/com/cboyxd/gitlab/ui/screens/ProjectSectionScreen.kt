@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Adjust
@@ -39,10 +40,16 @@ import androidx.compose.material.icons.outlined.NewReleases
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PlayCircleOutline
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material.icons.outlined.VpnKey
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,13 +64,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.cboyxd.gitlab.data.model.GitLabBranch
+import com.cboyxd.gitlab.data.model.GitLabCiVariable
 import com.cboyxd.gitlab.data.model.GitLabContributor
+import com.cboyxd.gitlab.data.model.GitLabEnvironment
 import com.cboyxd.gitlab.data.model.GitLabIssue
 import com.cboyxd.gitlab.data.model.GitLabLabel
 import com.cboyxd.gitlab.data.model.GitLabMergeRequest
 import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabRelease
 import com.cboyxd.gitlab.data.model.GitLabTag
+import com.cboyxd.gitlab.ui.components.PipelineStatusBadge
 import com.cboyxd.gitlab.ui.components.Avatar
 import com.cboyxd.gitlab.ui.components.CommitRow
 import com.cboyxd.gitlab.ui.components.EmptyState
@@ -114,7 +124,7 @@ fun ProjectSectionScreen(
   onBrowseRef: (String) -> Unit,
   onOpenRelease: (String) -> Unit,
   onNavigate: (ScreenDestination) -> Unit,
-  @Suppress("UNUSED_PARAMETER") onOpenInBrowser: (String) -> Unit,
+  onOpenInBrowser: (String) -> Unit,
   modifier: Modifier = Modifier,
   onSetIssueState: (String) -> Unit = {},
   onSetMergeRequestState: (String) -> Unit = {},
@@ -220,6 +230,28 @@ fun ProjectSectionScreen(
         state.pipelinesNextPage?.let { page -> item(key = "more") {
           LoadMoreRow(page = page, loading = state.loadingMore, failed = state.loadMoreFailed, onLoad = { onLoadMore(ProjectSection.PIPELINES) })
         } }
+      }
+      ProjectSection.ENVIRONMENTS -> Feed(
+        feed = state.environments,
+        visibleEmpty = state.environments.data.isEmpty(),
+        onRetry = retry,
+        empty = EmptyText(Icons.Outlined.Public, "No environments", "Deployment environments configured for this project appear here."),
+      ) {
+        items(state.environments.data, key = { it.id }) { env ->
+          EnvironmentRow(env, onOpenUrl = onOpenInBrowser)
+          GlDivider()
+        }
+      }
+      ProjectSection.CI_VARIABLES -> Feed(
+        feed = state.ciVariables,
+        visibleEmpty = state.ciVariables.data.isEmpty(),
+        onRetry = retry,
+        empty = EmptyText(Icons.Outlined.VpnKey, "No CI/CD variables", "Project CI/CD variables appear here for maintainers and owners."),
+      ) {
+        itemsIndexed(state.ciVariables.data, key = { index, v -> "$index:${v.key}:${v.environmentScope}" }) { _, variable ->
+          CiVariableRow(variable)
+          GlDivider()
+        }
       }
       ProjectSection.COMMITS -> {
         state.effectiveRef?.let { ref ->
@@ -524,3 +556,162 @@ private fun ContributorRow(person: GitLabContributor) {
     )
   }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EnvironmentRow(environment: GitLabEnvironment, onOpenUrl: (String) -> Unit) {
+  val c = Gl.colors
+  val externalUrl = environment.externalUrl?.takeIf { it.isNotBlank() }
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .then(
+        if (externalUrl != null) {
+          Modifier.clickable(role = Role.Button, onClickLabel = "Open ${environment.name}") { onOpenUrl(externalUrl) }
+        } else Modifier
+      )
+      .defaultMinSize(minHeight = 64.dp)
+      .padding(horizontal = GlSpace.margin, vertical = 12.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          environment.name.ifBlank { environment.slug.ifBlank { "Environment #${environment.id}" } },
+          style = Gl.type.rowTitle.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold),
+          color = c.textPrimary,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+      }
+      val stateTone = when (environment.state.lowercase()) {
+        "available" -> Tone.Success
+        "stopping" -> Tone.Warning
+        "stopped" -> Tone.Neutral
+        else -> Tone.Neutral
+      }
+      if (environment.state.isNotBlank()) {
+        Spacer(Modifier.width(8.dp))
+        GlBadge(environment.state.replaceFirstChar { it.uppercase() }, tone = stateTone)
+      }
+      if (externalUrl != null) {
+        IconButton(onClick = { onOpenUrl(externalUrl) }) {
+          Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open external URL", tint = c.accent, modifier = Modifier.size(18.dp))
+        }
+      }
+    }
+
+    val tier = environment.tier?.takeIf { it.isNotBlank() }
+    val deployment = environment.lastDeployment
+    if (tier != null || deployment != null) {
+      Spacer(Modifier.height(6.dp))
+      FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        if (tier != null) {
+          GlBadge(tier.replaceFirstChar { it.uppercase() }, tone = Tone.Info, modifier = Modifier.align(Alignment.CenterVertically))
+        }
+        if (deployment != null) {
+          if (deployment.status.isNotBlank()) {
+            PipelineStatusBadge(deployment.status, modifier = Modifier.align(Alignment.CenterVertically))
+          }
+          if (deployment.ref.isNotBlank()) {
+            RefPill(deployment.ref, modifier = Modifier.align(Alignment.CenterVertically))
+          }
+          if (deployment.sha.isNotBlank()) {
+            MonoPill(deployment.sha.take(8), modifier = Modifier.align(Alignment.CenterVertically))
+          }
+        }
+      }
+    }
+
+    if (deployment != null) {
+      val deployer = deployment.user?.let { it.name.ifBlank { it.username } }?.takeIf { it.isNotBlank() }
+      val whenDeployed = deployment.updatedAt.ifBlank { deployment.createdAt }.takeIf { it.isNotBlank() }
+      val summary = listOfNotNull(
+        deployment.iid.takeIf { it > 0 }?.let { "Deployment #$it" } ?: deployment.id.takeIf { it > 0 }?.let { "Deployment #$it" },
+        deployer,
+        whenDeployed,
+      ).joinToString(" · ")
+      if (summary.isNotBlank()) {
+        Spacer(Modifier.height(6.dp))
+        Text(summary, style = Gl.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      }
+    } else if (!environment.updatedAt.isNullOrBlank()) {
+      Spacer(Modifier.height(4.dp))
+      Text("Updated ${environment.updatedAt}", style = Gl.type.meta, color = c.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+  }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CiVariableRow(variable: GitLabCiVariable) {
+  val c = Gl.colors
+  val isSensitive = variable.masked || variable.hidden
+  var revealed by remember(variable.key, variable.environmentScope, isSensitive) { mutableStateOf(false) }
+
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .defaultMinSize(minHeight = 64.dp)
+      .padding(horizontal = GlSpace.margin, vertical = 12.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Text(
+        variable.key,
+        style = Gl.type.mono,
+        color = c.textPrimary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f),
+      )
+      if (!isSensitive && !variable.value.isNullOrEmpty()) {
+        IconButton(onClick = { revealed = !revealed }) {
+          Icon(
+            if (revealed) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+            contentDescription = if (revealed) "Hide value" else "Show value",
+            tint = c.textSecondary,
+            modifier = Modifier.size(18.dp),
+          )
+        }
+      }
+    }
+
+    Spacer(Modifier.height(6.dp))
+    FlowRow(
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      if (variable.variableType.equals("file", ignoreCase = true)) {
+        GlBadge("File", tone = Tone.Info)
+      }
+      if (variable.protected) {
+        GlBadge("Protected", tone = Tone.Success)
+      }
+      if (variable.masked) {
+        GlBadge("Masked", tone = Tone.Warning)
+      }
+      if (variable.hidden) {
+        GlBadge("Hidden", tone = Tone.Danger)
+      }
+      if (variable.raw) {
+        GlBadge("Raw", tone = Tone.Neutral)
+      }
+      MonoPill("env: ${variable.environmentScope.ifBlank { "*" }}")
+    }
+
+    Spacer(Modifier.height(6.dp))
+    when {
+      isSensitive -> Text("Value masked/hidden", style = Gl.type.meta, color = c.textSecondary)
+      revealed && !variable.value.isNullOrEmpty() -> Text(variable.value, style = Gl.type.monoSmall, color = c.textSecondary, maxLines = 4, overflow = TextOverflow.Ellipsis)
+      else -> Text("••••••••", style = Gl.type.monoSmall, color = c.textSecondary)
+    }
+
+    variable.description?.takeIf { it.isNotBlank() }?.let { desc ->
+      Spacer(Modifier.height(4.dp))
+      Text(desc, style = Gl.type.meta, color = c.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+  }
+}
+
