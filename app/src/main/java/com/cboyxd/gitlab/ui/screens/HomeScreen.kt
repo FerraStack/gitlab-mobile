@@ -98,6 +98,7 @@ import com.cboyxd.gitlab.ui.viewmodel.BottomTab
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
 import com.cboyxd.gitlab.ui.viewmodel.ScreenDestination
+import com.cboyxd.gitlab.ui.viewmodel.SnippetsState
 
 @Immutable
 data class HomeUiSlice(
@@ -111,6 +112,7 @@ data class HomeUiSlice(
   val pipelines: Loadable<List<GitLabPipeline>>,
   val projects: Loadable<List<GitLabProject>>,
   val groups: Loadable<List<GitLabGroup>>,
+  val snippets: SnippetsState = SnippetsState(),
   val activity: Loadable<List<GitLabEvent>>,
 )
 
@@ -138,6 +140,7 @@ fun HomeScreen(
     state.pipelines,
     state.projects,
     state.groups,
+    state.snippets,
     state.activity,
   ) {
     HomeUiSlice(
@@ -151,6 +154,7 @@ fun HomeScreen(
       pipelines = state.pipelines,
       projects = state.projects,
       groups = state.groups,
+      snippets = state.snippets,
       activity = state.activity,
     )
   },

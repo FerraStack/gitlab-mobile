@@ -200,7 +200,7 @@ class FeatureLogicTest {
         return r
       }
       override fun notify(text: String) { messages += text }
-      override fun notifyError(text: String) { errors += text }
+      override fun notifyError(text: String, retryAction: (() -> Unit)?) { errors += text }
       override fun navigateTo(destination: ScreenDestination) { navigated += destination }
       override fun openExternal(url: String) { externalUrls += url }
     }
