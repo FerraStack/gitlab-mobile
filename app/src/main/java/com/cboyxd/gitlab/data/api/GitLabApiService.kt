@@ -26,6 +26,8 @@ import com.cboyxd.gitlab.data.model.GitLabMergeRequestUpdate
 import com.cboyxd.gitlab.data.model.GitLabNote
 import com.cboyxd.gitlab.data.model.GitLabPipeline
 import com.cboyxd.gitlab.data.model.GitLabProject
+import com.cboyxd.gitlab.data.model.GitLabCiVariable
+import com.cboyxd.gitlab.data.model.GitLabEnvironment
 import com.cboyxd.gitlab.data.model.GitLabTodo
 import com.cboyxd.gitlab.data.model.GitLabTreeItem
 import com.cboyxd.gitlab.data.model.GitLabUser
@@ -764,26 +766,6 @@ interface GitLabApiService {
     @Path(value = "id", encoded = true) path: String
   ): Response<GitLabNamespace>
 
-  @GET("api/v4/snippets/{snippet_id}")
-  suspend fun getSnippet(@Path("snippet_id") snippetId: Long): Response<GitLabSnippet>
-
-  @Streaming
-  @GET("api/v4/snippets/{snippet_id}/raw")
-  suspend fun getSnippetRaw(@Path("snippet_id") snippetId: Long): Response<ResponseBody>
-
-  @GET("api/v4/projects/{id}/snippets/{snippet_id}")
-  suspend fun getProjectSnippet(
-    @Path("id") projectId: Long,
-    @Path("snippet_id") snippetId: Long
-  ): Response<GitLabSnippet>
-
-  @Streaming
-  @GET("api/v4/projects/{id}/snippets/{snippet_id}/raw")
-  suspend fun getProjectSnippetRaw(
-    @Path("id") projectId: Long,
-    @Path("snippet_id") snippetId: Long
-  ): Response<ResponseBody>
-
   // ---- Award emojis ----
 
   @GET("api/v4/projects/{id}/issues/{issue_iid}/award_emoji")
@@ -900,4 +882,51 @@ interface GitLabApiService {
 
   @POST("api/v4/todos/mark_as_done")
   suspend fun markAllTodosAsDone(): Response<ResponseBody>
+
+  @GET("api/v4/snippets")
+  suspend fun getSnippets(
+    @Query("per_page") perPage: Int = 50,
+    @Query("page") page: Int = 1
+  ): Response<List<GitLabSnippet>>
+
+  @GET("api/v4/snippets/{snippet_id}")
+  suspend fun getSnippet(@Path("snippet_id") snippetId: Long): Response<GitLabSnippet>
+
+  @Streaming
+  @GET("api/v4/snippets/{snippet_id}/raw")
+  suspend fun getSnippetRaw(@Path("snippet_id") snippetId: Long): Response<ResponseBody>
+
+  @GET("api/v4/projects/{id}/snippets")
+  suspend fun getProjectSnippets(
+    @Path("id") projectId: Long,
+    @Query("per_page") perPage: Int = 50,
+    @Query("page") page: Int = 1
+  ): Response<List<GitLabSnippet>>
+
+  @GET("api/v4/projects/{id}/snippets/{snippet_id}")
+  suspend fun getProjectSnippet(
+    @Path("id") projectId: Long,
+    @Path("snippet_id") snippetId: Long
+  ): Response<GitLabSnippet>
+
+  @Streaming
+  @GET("api/v4/projects/{id}/snippets/{snippet_id}/raw")
+  suspend fun getProjectSnippetRaw(
+    @Path("id") projectId: Long,
+    @Path("snippet_id") snippetId: Long
+  ): Response<ResponseBody>
+
+  @GET("api/v4/projects/{id}/variables")
+  suspend fun getProjectVariables(
+    @Path("id") projectId: Long,
+    @Query("per_page") perPage: Int = 100,
+    @Query("page") page: Int = 1
+  ): Response<List<GitLabCiVariable>>
+
+  @GET("api/v4/projects/{id}/environments")
+  suspend fun getProjectEnvironments(
+    @Path("id") projectId: Long,
+    @Query("per_page") perPage: Int = 50,
+    @Query("page") page: Int = 1
+  ): Response<List<GitLabEnvironment>>
 }

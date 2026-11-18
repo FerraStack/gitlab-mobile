@@ -241,10 +241,15 @@ class ExploreFeature internal constructor(private val host: SessionHost) {
     val arg = rest.getOrNull(1)
     if (projectPath.isEmpty()) {
       return when (kind) {
-        "snippets" -> arg?.toLongOrNull()?.let { sid ->
-          host.navigateTo(ScreenDestination.FileViewer(0L, "snippet-$sid", snippetId = sid))
+        "snippets" -> if (arg == null) {
+          host.navigateTo(ScreenDestination.SnippetsList())
           true
-        } ?: false
+        } else {
+          arg.toLongOrNull()?.let { sid ->
+            host.navigateTo(ScreenDestination.FileViewer(0L, "snippet-$sid", snippetId = sid))
+            true
+          } ?: false
+        }
         else -> false
       }
     }
@@ -274,6 +279,7 @@ class ExploreFeature internal constructor(private val host: SessionHost) {
       } else {
         withProject(url, projectPath) { host.navigateTo(ScreenDestination.ReleaseDetail(it, Uri.decode(arg))) }
       }
+      "environments" -> withProject(url, projectPath) { host.navigateTo(ScreenDestination.ProjectSectionList(it, ProjectSection.ENVIRONMENTS)) }
       "tree" -> {
         val ref = arg?.takeIf { it.isNotBlank() }?.let(Uri::decode) ?: return false
         val treePath = rest.drop(2).joinToString("/") { Uri.decode(it) }.trim('/')
@@ -285,9 +291,13 @@ class ExploreFeature internal constructor(private val host: SessionHost) {
         val file = rest.drop(2).joinToString("/") { Uri.decode(it) }.takeIf { it.isNotEmpty() } ?: return false
         withProject(url, projectPath) { host.navigateTo(ScreenDestination.FileViewer(it, file, ref)) }
       }
-      "snippets" -> arg?.toLongOrNull()?.let { sid ->
-        withProject(url, projectPath) { host.navigateTo(ScreenDestination.FileViewer(it, "snippet-$sid", snippetId = sid)) }
-      } ?: false
+      "snippets" -> if (arg == null) {
+        withProject(url, projectPath) { host.navigateTo(ScreenDestination.SnippetsList(it)) }
+      } else {
+        arg.toLongOrNull()?.let { sid ->
+          withProject(url, projectPath) { host.navigateTo(ScreenDestination.FileViewer(it, "snippet-$sid", snippetId = sid)) }
+        } ?: false
+      }
       else -> false
     }
   }

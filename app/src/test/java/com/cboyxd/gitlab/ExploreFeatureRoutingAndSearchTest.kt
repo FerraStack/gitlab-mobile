@@ -56,7 +56,7 @@ class ExploreFeatureRoutingAndSearchTest {
     val external = CopyOnWriteArrayList<String>()
     override suspend fun <T> api(block: suspend (GitLabInstance) -> Result<T>): Result<T> = block(instance)
     override fun notify(text: String) = Unit
-    override fun notifyError(text: String) = Unit
+    override fun notifyError(text: String, retryAction: (() -> Unit)?) = Unit
     override fun navigateTo(destination: ScreenDestination) {
       navigated += destination
     }

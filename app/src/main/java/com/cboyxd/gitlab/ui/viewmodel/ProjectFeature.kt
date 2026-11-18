@@ -228,7 +228,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
               }
             }
           }
-          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) { loadMore(section) } }
         }
       }
       ProjectSection.MERGE_REQUESTS -> {
@@ -251,7 +251,7 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
               }
             }
           }
-          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) }
+          result.exceptionOrNull()?.let { host.notifyError(it.userMessage()) { loadMore(section) } }
         }
       }
       ProjectSection.PIPELINES -> {
@@ -316,6 +316,8 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       ProjectSection.ISSUES -> d.issues
       ProjectSection.MERGE_REQUESTS -> d.mergeRequests
       ProjectSection.PIPELINES -> d.pipelines
+      ProjectSection.ENVIRONMENTS -> d.environments
+      ProjectSection.CI_VARIABLES -> d.ciVariables
       ProjectSection.COMMITS -> d.commits
       ProjectSection.BRANCHES -> d.branches
       ProjectSection.TAGS -> d.tags
@@ -369,6 +371,10 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
           }
         },
       )
+      ProjectSection.ENVIRONMENTS -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(environments = it.environments.start()) } },
+        { repo.getProjectEnvironments(it, id) }, { s, r -> s.withProject(id) { it.copy(environments = it.environments.settle(r)) } })
+      ProjectSection.CI_VARIABLES -> host.load(sectionJobs[section], { s -> s.withProject(id) { it.copy(ciVariables = it.ciVariables.start()) } },
+        { repo.getProjectVariables(it, id) }, { s, r -> s.withProject(id) { it.copy(ciVariables = it.ciVariables.settle(r)) } })
       ProjectSection.COMMITS -> host.load(
         sectionJobs[section],
         { s -> s.withProject(id) { it.copy(commits = it.commits.start(), loadMoreFailed = false) } },
@@ -517,8 +523,8 @@ class ProjectFeature internal constructor(private val host: SessionHost) {
       it.copy(file = FileState(projectId, fallbackName, Loadable<String?>(null, loading = true), snippetId = snippetId))
     }
     fileJob = host.session.launch {
-      val meta = host.api { host.repository.getSnippet(it, projectId, snippetId) }.getOrNull()
-      val raw = host.api { host.repository.getSnippetRaw(it, projectId, snippetId) }
+      val meta = host.api { host.repository.getSnippet(it, snippetId = snippetId, projectId = projectId) }.getOrNull()
+      val raw = host.api { host.repository.getSnippetRaw(it, snippetId = snippetId, projectId = projectId) }
       host.state.update { s ->
         if (s.file.projectId != projectId || s.file.snippetId != snippetId) s
         else {

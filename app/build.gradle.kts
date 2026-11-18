@@ -77,6 +77,7 @@ android {
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
+  implementation(libs.androidx.biometric)
   implementation(libs.androidx.browser)
   implementation(libs.androidsvg)
   implementation(libs.androidx.compose.material.icons.core)

@@ -7,7 +7,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.core.tween
@@ -36,6 +39,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Adjust
 import androidx.compose.material.icons.outlined.CallMerge
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Inbox
@@ -129,9 +133,13 @@ import com.cboyxd.gitlab.ui.screens.MergeRequestsScreen
 import com.cboyxd.gitlab.ui.screens.PipelinesScreen
 import com.cboyxd.gitlab.ui.screens.ProjectDetailScreen
 import com.cboyxd.gitlab.ui.screens.ProjectsScreen
+import com.cboyxd.gitlab.ui.screens.SecuritySettingsRoute
+import com.cboyxd.gitlab.ui.screens.SnippetDetailScreen
+import com.cboyxd.gitlab.ui.screens.SnippetsScreen
 import com.cboyxd.gitlab.ui.screens.UserProfileScreen
 import com.cboyxd.gitlab.ui.theme.Gl
 import com.cboyxd.gitlab.ui.theme.GlMotion
+import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.theme.glTween
 import com.cboyxd.gitlab.ui.viewmodel.BottomTab
 import com.cboyxd.gitlab.ui.viewmodel.GitLabViewModel
@@ -307,54 +315,63 @@ fun MainScreen(viewModel: GitLabViewModel, onExit: () -> Unit) {
             )
           }
           else -> {
-            val reduced = Gl.reducedMotion
-            // Key AnimatedContent only on route/tab/depth so data updates never re-trigger screen transitions
-            // or recompose exiting screens.
-            val presentedState = remember { mutableStateOf(uiState) }
-            val activeKeyState = remember {
-              mutableStateOf(NavKey(uiState.destination, uiState.currentTab, uiState.backStack.size))
-            }
-            if (uiState.pendingDestination == null) {
-              presentedState.value = uiState
-              val nextKey = NavKey(uiState.destination, uiState.currentTab, uiState.backStack.size)
-              if (activeKeyState.value != nextKey) activeKeyState.value = nextKey
-            }
-            val activeKey = activeKeyState.value
-            AnimatedContent(
-              targetState = activeKey,
-              contentKey = { it.destination to it.tab },
-              modifier = Modifier.fillMaxSize(),
-              transitionSpec = {
-                if (reduced) {
-                  fadeIn(glTween(GlMotion.MEDIUM, true)) togetherWith fadeOut(glTween(GlMotion.MEDIUM, true))
-                } else {
-                  val direction = when {
-                    targetState.depth > initialState.depth -> 1
-                    targetState.depth < initialState.depth -> -1
-                    else -> if (targetState.tab.ordinal >= initialState.tab.ordinal) 1 else -1
+            Column(modifier = Modifier.fillMaxSize()) {
+              AnimatedVisibility(
+                visible = uiState.isOffline,
+                enter = expandVertically(),
+                exit = shrinkVertically(),
+              ) {
+                OfflineBanner(savedAtMs = uiState.offlineSnapshotSavedAtMs)
+              }
+              val reduced = Gl.reducedMotion
+              // Key AnimatedContent only on route/tab/depth so data updates never re-trigger screen transitions
+              // or recompose exiting screens.
+              val presentedState = remember { mutableStateOf(uiState) }
+              val activeKeyState = remember {
+                mutableStateOf(NavKey(uiState.destination, uiState.currentTab, uiState.backStack.size))
+              }
+              if (uiState.pendingDestination == null) {
+                presentedState.value = uiState
+                val nextKey = NavKey(uiState.destination, uiState.currentTab, uiState.backStack.size)
+                if (activeKeyState.value != nextKey) activeKeyState.value = nextKey
+              }
+              val activeKey = activeKeyState.value
+              AnimatedContent(
+                targetState = activeKey,
+                contentKey = { it.destination to it.tab },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                transitionSpec = {
+                  if (reduced) {
+                    fadeIn(glTween(GlMotion.MEDIUM, true)) togetherWith fadeOut(glTween(GlMotion.MEDIUM, true))
+                  } else {
+                    val direction = when {
+                      targetState.depth > initialState.depth -> 1
+                      targetState.depth < initialState.depth -> -1
+                      else -> if (targetState.tab.ordinal >= initialState.tab.ordinal) 1 else -1
+                    }
+                    ((slideInHorizontally(tween(340, easing = GlMotion.Standard)) { direction * it / 7 } +
+                      fadeIn(tween(280, delayMillis = 50))) togetherWith
+                      (slideOutHorizontally(tween(340, easing = GlMotion.Standard)) { -direction * it / 12 } +
+                        fadeOut(tween(240)))).using(SizeTransform(clip = false))
                   }
-                  ((slideInHorizontally(tween(340, easing = GlMotion.Standard)) { direction * it / 7 } +
-                    fadeIn(tween(280, delayMillis = 50))) togetherWith
-                    (slideOutHorizontally(tween(340, easing = GlMotion.Standard)) { -direction * it / 12 } +
-                      fadeOut(tween(240)))).using(SizeTransform(clip = false))
-                }
-              },
-              label = "screen",
-            ) { navKey ->
-              val sceneState = remember(navKey) { mutableStateOf(presentedState.value) }
-              if (navKey == activeKey) sceneState.value = presentedState.value
-              Destination(
-                uiState = sceneState.value,
-                destination = navKey.destination,
-                tab = navKey.tab,
-                isExpanded = isExpanded,
-                viewModel = viewModel,
-                context = context,
-                openSwitcher = openSwitcher,
-                openServers = openServers,
-                openAddServer = openAddServer,
-                onAddServerConsumed = onAddServerConsumed,
-              )
+                },
+                label = "screen",
+              ) { navKey ->
+                val sceneState = remember(navKey) { mutableStateOf(presentedState.value) }
+                if (navKey == activeKey) sceneState.value = presentedState.value
+                Destination(
+                  uiState = sceneState.value,
+                  destination = navKey.destination,
+                  tab = navKey.tab,
+                  isExpanded = isExpanded,
+                  viewModel = viewModel,
+                  context = context,
+                  openSwitcher = openSwitcher,
+                  openServers = openServers,
+                  openAddServer = openAddServer,
+                  onAddServerConsumed = onAddServerConsumed,
+                )
+              }
             }
           }
         }
@@ -783,12 +800,29 @@ private fun Destination(
           onClearLogin = viewModel::clearLoginState,
           onBack = back,
           onOpenNotifications = { viewModel.navigateTo(ScreenDestination.NotificationSettings) },
+          onOpenSecurity = { viewModel.navigateTo(ScreenDestination.SecuritySettings) },
         )
         ScreenDestination.NotificationSettings -> NotificationSettingsRoute(
           onBack = back,
           onOpenDiagnostics = { viewModel.navigateTo(ScreenDestination.NotificationDiagnostics) },
         )
         ScreenDestination.NotificationDiagnostics -> NotificationDiagnosticsRoute(onBack = back)
+        ScreenDestination.SecuritySettings -> SecuritySettingsRoute(onBack = back)
+        is ScreenDestination.SnippetsList -> SnippetsScreen(
+          state = uiState.snippets,
+          projectTitle = if (destination.projectId != null && destination.projectId == project.projectId) {
+            project.project.data?.nameWithNamespace
+          } else null,
+          onBack = back,
+          onRetry = viewModel.snippet::retryList,
+          onSelectSnippet = viewModel.snippet::openDetail,
+        )
+        is ScreenDestination.SnippetDetail -> SnippetDetailScreen(
+          state = uiState.snippetDetail,
+          onBack = back,
+          onRetry = viewModel.snippet::retryDetail,
+          onOpenInBrowser = browser,
+        )
         is ScreenDestination.ProjectDetail -> ProjectDetailScreen(
           state = project,
           pendingStar = project.projectId in uiState.pendingStars,
@@ -805,6 +839,7 @@ private fun Destination(
           onLoadRefs = viewModel.code::loadRefs,
           onFilterRefs = viewModel.code::filterRefs,
           onRefresh = viewModel.code::refresh,
+          onOpenSnippets = { viewModel.snippet.openList(project.projectId) },
           onOpenSearch = { viewModel.explore.openSearch(project.projectId, project.project.data?.name) },
         )
         is ScreenDestination.ProjectCode -> ProjectCodeScreen(
@@ -1081,6 +1116,32 @@ private fun InstanceSwitcherSheet(
         onClick = { close { onManage(false) } },
       )
     }
+  }
+}
+
+@Composable
+internal fun OfflineBanner(savedAtMs: Long?) {
+  val c = Gl.colors
+  Column(modifier = Modifier.fillMaxWidth().background(c.warningBg).testTag("offline_banner")) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = GlSpace.margin, vertical = 8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector = Icons.Outlined.CloudOff,
+        contentDescription = null,
+        tint = c.warning,
+        modifier = Modifier.size(16.dp),
+      )
+      Spacer(Modifier.width(8.dp))
+      Text(
+        text = if (savedAtMs != null) "You're offline · Showing cached data" else "You're offline",
+        style = Gl.type.meta,
+        color = c.warning,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+      )
+    }
+    GlDivider()
   }
 }
 
