@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.cboyxd.gitlab.data.model.GitLabInstance
 import com.cboyxd.gitlab.ui.components.Avatar
 import com.cboyxd.gitlab.ui.components.EmptyState
 import com.cboyxd.gitlab.ui.components.ErrorState
@@ -75,14 +77,67 @@ import com.cboyxd.gitlab.ui.theme.GlSpace
 import com.cboyxd.gitlab.ui.viewmodel.GitLabNotification
 import com.cboyxd.gitlab.ui.viewmodel.GitLabUiState
 import com.cboyxd.gitlab.ui.viewmodel.InboxFilter
+import com.cboyxd.gitlab.ui.viewmodel.Loadable
 
 private val AssignedActions = setOf("assigned", "review_requested", "approval_required")
 private val MentionActions = setOf("mentioned", "directly_addressed")
 
-@OptIn(ExperimentalMaterial3Api::class)
+@Immutable
+data class InboxUiSlice(
+  val activeInstance: GitLabInstance?,
+  val isSignedIn: Boolean,
+  val refreshing: Boolean,
+  val notifications: Loadable<List<GitLabNotification>>,
+  val unreadCount: Int,
+  val inboxFilter: InboxFilter,
+  val inboxTypeFilter: InboxTypeFilter = InboxTypeFilter.ALL,
+)
+
 @Composable
 fun InboxScreen(
   state: GitLabUiState,
+  onRefresh: () -> Unit,
+  onFilterChange: (InboxFilter) -> Unit,
+  onTypeFilterChange: (InboxTypeFilter) -> Unit = {},
+  onOpen: (GitLabNotification) -> Unit,
+  onMarkDone: (String) -> Unit,
+  onMarkAllDone: () -> Unit,
+  onAddServer: () -> Unit,
+  modifier: Modifier = Modifier,
+) = InboxScreen(
+  state = remember(
+    state.activeInstance,
+    state.isSignedIn,
+    state.refreshing,
+    state.notifications,
+    state.unreadCount,
+    state.inboxFilter,
+    state.inboxTypeFilter,
+  ) {
+    InboxUiSlice(
+      activeInstance = state.activeInstance,
+      isSignedIn = state.isSignedIn,
+      refreshing = state.refreshing,
+      notifications = state.notifications,
+      unreadCount = state.unreadCount,
+      inboxFilter = state.inboxFilter,
+      inboxTypeFilter = state.inboxTypeFilter,
+    )
+  },
+  onRefresh = onRefresh,
+  onFilterChange = onFilterChange,
+  onTypeFilterChange = onTypeFilterChange,
+  onOpen = onOpen,
+  onMarkDone = onMarkDone,
+  onMarkAllDone = onMarkAllDone,
+  onAddServer = onAddServer,
+  modifier = modifier,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InboxScreen(
+  state: InboxUiSlice,
   onRefresh: () -> Unit,
   onFilterChange: (InboxFilter) -> Unit,
   onTypeFilterChange: (InboxTypeFilter) -> Unit = {},

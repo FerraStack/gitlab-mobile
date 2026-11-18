@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">GitLab</string>
+    <string name="widget_name">To-dos &amp; Pipelines</string>
+    <string name="widget_description">Shows your pending GitLab to-dos and latest pipelines.</string>
 </resources>

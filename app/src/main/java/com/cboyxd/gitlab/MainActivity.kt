@@ -39,6 +39,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import com.cboyxd.gitlab.widget.GitLabWidgetProvider
 
 class MainActivity : FragmentActivity() {
 
@@ -215,6 +216,18 @@ class MainActivity : FragmentActivity() {
           url = open.url,
         )
       }
+      setIntent(Intent(this, MainActivity::class.java))
+      return
+    }
+    if (intent?.action == GitLabWidgetProvider.ACTION_OPEN_INBOX) {
+      viewModel.openWidgetInbox()
+      setIntent(Intent(this, MainActivity::class.java))
+      return
+    }
+    if (intent?.action == GitLabWidgetProvider.ACTION_OPEN_PIPELINE) {
+      val projectId = intent.getLongExtra(GitLabWidgetProvider.EXTRA_PROJECT_ID, 0L)
+      val pipelineId = intent.getLongExtra(GitLabWidgetProvider.EXTRA_PIPELINE_ID, 0L)
+      viewModel.openWidgetPipeline(projectId, pipelineId)
       setIntent(Intent(this, MainActivity::class.java))
       return
     }

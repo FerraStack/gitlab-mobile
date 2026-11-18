@@ -348,9 +348,15 @@ fun GlSectionBand(modifier: Modifier = Modifier, height: Dp = 12.dp) {
   Box(modifier.fillMaxWidth().height(height).background(Gl.colors.sunken))
 }
 
-/** Colored rounded tile with a white icon, in front of navigation rows (Issues, Merge requests…). */
+/** Colored rounded tile with a contrasting icon, in front of navigation rows (Issues, Merge requests…). */
 @Composable
-fun ColorTile(icon: ImageVector, color: Color, modifier: Modifier = Modifier, size: Dp = 32.dp) {
+fun ColorTile(
+  icon: ImageVector,
+  color: Color,
+  modifier: Modifier = Modifier,
+  size: Dp = 32.dp,
+  iconTint: Color = com.cboyxd.gitlab.ui.theme.GlTile.iconTint(color),
+) {
   Box(
     modifier = modifier
       .size(size)
@@ -358,7 +364,7 @@ fun ColorTile(icon: ImageVector, color: Color, modifier: Modifier = Modifier, si
       .background(color),
     contentAlignment = Alignment.Center,
   ) {
-    Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.6f))
+    Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(size * 0.6f))
   }
 }
 

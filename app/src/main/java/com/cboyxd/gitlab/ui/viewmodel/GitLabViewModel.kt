@@ -35,6 +35,9 @@ import com.cboyxd.gitlab.data.storage.OfflineSnapshotStore
 import com.cboyxd.gitlab.data.storage.SecurityPreferences
 import com.cboyxd.gitlab.notifications.GitLabNotifications
 import com.cboyxd.gitlab.notifications.NotificationStore
+import com.cboyxd.gitlab.widget.GitLabWidgetProvider
+import com.cboyxd.gitlab.widget.WidgetPipelineSummary
+import com.cboyxd.gitlab.widget.WidgetStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -518,6 +521,11 @@ class GitLabViewModel(
     navigateTo(ScreenDestination.IssueDetail(issue.projectId, issue.iid))
   }
 
+  fun openIssueInPane(issue: GitLabIssue) {
+    seedIssue(issue)
+    openIssue(issue.projectId, issue.iid, seeded = true)
+  }
+
   fun openMergeRequest(mr: GitLabMergeRequest) = review.open(mr)
 
   // -------------------------------------------------------------------------------------------
@@ -579,7 +587,10 @@ class GitLabViewModel(
           else projects.getOrNull()?.let { list -> api { repository.getRecentPipelinesPage(it, list) } }
             ?: Result.failure(projects.exceptionOrNull() ?: IllegalStateException())
           pipelines.fold(
-            onSuccess = { slice -> _uiState.update { s -> s.copy(pipelines = s.pipelines.success(slice.items), pipelinesTruncated = slice.truncated) } },
+            onSuccess = { slice ->
+              _uiState.update { s -> s.copy(pipelines = s.pipelines.success(slice.items), pipelinesTruncated = slice.truncated) }
+              syncWidgetPipelines()
+            },
             onFailure = { error -> _uiState.update { s -> s.copy(pipelines = s.pipelines.failure(error.userMessage())) } }
           )
         }
@@ -617,6 +628,7 @@ class GitLabViewModel(
               anyFeedSucceeded = true
               val mapped = mapTodosWithPendingUndo(list)
               _uiState.update { s -> s.copy(notifications = s.notifications.success(mapped)) }
+              syncWidgetTodos()
             },
             onFailure = { error -> _uiState.update { s -> s.copy(notifications = s.notifications.failure(error.userMessage())) } }
           )
@@ -815,6 +827,15 @@ class GitLabViewModel(
 
   private fun publishInstances(instances: List<GitLabInstance>, active: GitLabInstance?) {
     _uiState.update { it.copy(savedInstances = instances, activeInstance = active ?: GitLabAuth.GUEST) }
+    val signedInIds = instances.filter { it.token.isNotBlank() }.map { it.id }.toSet()
+    val app = getApplication<Application>()
+    if (signedInIds.isEmpty()) {
+      WidgetStore.clear(app)
+      GitLabWidgetProvider.refreshAll(app)
+    } else {
+      WidgetStore.saveAccountTodos(app, signedInIds, emptyMap())
+      GitLabWidgetProvider.refreshAll(app)
+    }
   }
 
   fun clearLoginState() {
@@ -1506,6 +1527,7 @@ class GitLabViewModel(
               mergeRequestDetail = s.mergeRequestDetail.copy(pipelines = s.mergeRequestDetail.pipelines.copy(data = s.mergeRequestDetail.pipelines.data.swap())),
             )
           }
+          syncWidgetPipelines()
           notify("Pipeline #${retried.id} restarted")
           if (_uiState.value.pipelineDetail.pipelineId == retried.id) ci.loadPipeline(retried.projectId, retried.id)
         },
@@ -1593,6 +1615,7 @@ class GitLabViewModel(
       }.onSuccess { list ->
         val mapped = mapTodosWithPendingUndo(list)
         _uiState.update { it.copy(notifications = it.notifications.success(mapped)) }
+        syncWidgetTodos()
       }
     }
   }
@@ -1638,17 +1661,37 @@ class GitLabViewModel(
     }
   }
 
+  fun openWidgetInbox() {
+    viewModelScope.launch {
+      _uiState.first { it.bootstrapped }
+      switchTab(BottomTab.INBOX)
+    }
+  }
+
+  fun openWidgetPipeline(projectId: Long, pipelineId: Long) {
+    viewModelScope.launch {
+      _uiState.first { it.bootstrapped }
+      if (projectId > 0L && pipelineId > 0L && _uiState.value.isSignedIn) {
+        navigateTo(ScreenDestination.PipelineDetail(projectId, pipelineId))
+      } else {
+        switchTab(BottomTab.HOME)
+      }
+    }
+  }
+
   fun markNotificationDone(id: String) {
     val current = _uiState.value.notifications.data.find { it.id == id } ?: return
     if (!current.isUnread) return
     val todoId = id.toLongOrNull() ?: return
     if (id in pendingDone) return
     setNotificationUnread(id, false)
+    syncWidgetTodos()
     pendingDone[id] = session.launch {
       delay(todoUndoDelayMs)
       pendingDone.remove(id)
       api { repository.markTodoDone(it, todoId) }.onFailure { error ->
         setNotificationUnread(id, true)
+        syncWidgetTodos()
         notifyError(error.userMessage()) { markNotificationDone(id) }
       }
     }
@@ -1664,6 +1707,7 @@ class GitLabViewModel(
   fun undoNotificationDone(id: String) {
     pendingDone.remove(id)?.cancel()
     setNotificationUnread(id, true)
+    syncWidgetTodos()
   }
 
   private fun setNotificationUnread(id: String, unread: Boolean) {
@@ -1683,6 +1727,7 @@ class GitLabViewModel(
         if (it.id in unreadIds) it.copy(isUnread = false) else it
       }))
     }
+    syncWidgetTodos()
     pendingMarkAllJob = session.launch {
       delay(todoUndoDelayMs)
       val committedIds = pendingMarkAllIds
@@ -1694,6 +1739,7 @@ class GitLabViewModel(
             if (it.id in committedIds) it.copy(isUnread = true) else it
           }))
         }
+        syncWidgetTodos()
         notifyError(error.userMessage()) { markAllNotificationsDone() }
       }
     }
@@ -1716,6 +1762,42 @@ class GitLabViewModel(
         if (it.id in restoredIds) it.copy(isUnread = true) else it
       }))
     }
+    syncWidgetTodos()
+  }
+
+  private fun syncWidgetTodos() {
+    val state = _uiState.value
+    val signedIn = state.savedInstances.filter { it.token.isNotBlank() }.map { it.id }.toSet()
+    val app = getApplication<Application>()
+    if (signedIn.isEmpty()) {
+      WidgetStore.clear(app)
+      GitLabWidgetProvider.refreshAll(app)
+      return
+    }
+    val active = state.activeInstance?.takeIf { it.token.isNotBlank() }
+    val observed = if (active != null && state.notifications.loaded && state.notifications.error == null) {
+      mapOf(active.id to state.notifications.data.count { it.isUnread })
+    } else emptyMap()
+    WidgetStore.saveAccountTodos(app, signedIn, observed)
+    GitLabWidgetProvider.refreshAll(app)
+  }
+
+  private fun syncWidgetPipelines() {
+    val state = _uiState.value
+    val app = getApplication<Application>()
+    if (state.savedInstances.none { it.token.isNotBlank() }) return
+    val projectsById = state.projects.data.associateBy { it.id }
+    val summaries = state.pipelines.data.take(3).map { pipeline ->
+      WidgetPipelineSummary(
+        id = pipeline.id,
+        projectId = pipeline.projectId,
+        projectPath = projectsById[pipeline.projectId]?.pathWithNamespace.orEmpty(),
+        ref = pipeline.ref,
+        status = pipeline.status,
+      )
+    }
+    WidgetStore.savePipelines(app, summaries)
+    GitLabWidgetProvider.refreshAll(app)
   }
 
   /** Opens what a to-do points at. Returns the URL to open externally when the app has no screen for it. */
@@ -1731,6 +1813,28 @@ class GitLabViewModel(
         navigateTo(ScreenDestination.MergeRequestDetail(projectId, iid)); null
       }
       else -> notification.targetUrl
+    }
+  }
+
+  /**
+   * Loads a to-do target into the detail pane without leaving Inbox on expanded layouts.
+   * Returns `"Issue"` or `"MergeRequest"` when handled in-pane, or `null` with an optional
+   * external URL when the target cannot be shown inline.
+   */
+  fun openNotificationInPane(notification: GitLabNotification): Pair<String?, String?> {
+    markNotificationDone(notification.id)
+    val projectId = notification.targetProjectId
+    val iid = notification.targetIid
+    return when {
+      projectId != null && iid != null && notification.targetType == "Issue" -> {
+        openIssue(projectId, iid)
+        "Issue" to null
+      }
+      projectId != null && iid != null && notification.targetType == "MergeRequest" -> {
+        review.load(projectId, iid)
+        "MergeRequest" to null
+      }
+      else -> null to notification.targetUrl
     }
   }
 

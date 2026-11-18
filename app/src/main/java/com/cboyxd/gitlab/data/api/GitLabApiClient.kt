@@ -9,7 +9,6 @@ import com.squareup.moshi.JsonReader
 import com.squareup.moshi.JsonWriter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Cache
 import okhttp3.CacheControl
 import okhttp3.Dispatcher
@@ -35,7 +34,6 @@ object GitLabApiClient {
 
   val moshi: Moshi = Moshi.Builder()
     .add(NullsAsDefaultsFactory)
-    .add(KotlinJsonAdapterFactory())
     .build()
 
   /** One connection pool and dispatcher for every server; per-instance clients only add auth. */

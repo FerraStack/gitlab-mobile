@@ -70,7 +70,7 @@ data class GlColors(
   val imageOutline: Color,
 )
 
-/** Tile fills behind navigation icons, the same in both themes; icons on them are white. */
+/** Tile fills behind navigation icons, the same in both themes; light tiles take dark glyphs for 3:1+ contrast. */
 object GlTile {
   val green = Color(0xFF2DA160)
   val blue = Color(0xFF1F75CB)
@@ -80,6 +80,13 @@ object GlTile {
   val purple = Color(0xFF7759C2)
   val gray = Color(0xFF737278)
   val slate = Color(0xFF45444B)
+
+  private val darkGlyph = Color(0xFF1F1E24)
+
+  fun iconTint(tile: Color): Color = when (tile) {
+    yellow, orange -> darkGlyph
+    else -> Color.White
+  }
 }
 
 val LightGlColors = GlColors(
@@ -90,7 +97,7 @@ val LightGlColors = GlColors(
   surface2 = Color(0xFFF0F0F2),
   surface3 = Color(0xFFE4E4E7),
   border = Color(0xFFE4E4E7),
-  borderStrong = Color(0xFFBFBFC3),
+  borderStrong = Color(0xFF8A8A91),
   textPrimary = Color(0xFF1F1E24),
   textSecondary = Color(0xFF535158),
   textTertiary = Color(0xFF6B6A70),
@@ -116,7 +123,7 @@ val LightGlColors = GlColors(
   syntaxKeyword = Color(0xFFCF222E),
   syntaxString = Color(0xFF0A3069),
   syntaxLiteral = Color(0xFF0550AE),
-  syntaxComment = Color(0xFF6E7781),
+  syntaxComment = Color(0xFF525860),
   syntaxMeta = Color(0xFF953800),
   codeBg = Color(0xFFF6F6F8),
   lineHighlight = Color(0xFFFFF4CC),
@@ -137,7 +144,7 @@ val DarkGlColors = GlColors(
   surface2 = Color(0xFF202024),
   surface3 = Color(0xFF2B2B30),
   border = Color(0xFF232327),
-  borderStrong = Color(0xFF3F3F45),
+  borderStrong = Color(0xFF6E6E76),
   textPrimary = Color(0xFFF3F3F6),
   textSecondary = Color(0xFFB3B3BB),
   textTertiary = Color(0xFF9D9DA6),
@@ -162,7 +169,7 @@ val DarkGlColors = GlColors(
   syntaxKeyword = Color(0xFFFF7B72),
   syntaxString = Color(0xFFA5D6FF),
   syntaxLiteral = Color(0xFF79C0FF),
-  syntaxComment = Color(0xFF9E9DA3),
+  syntaxComment = Color(0xFFC2C1C8),
   syntaxMeta = Color(0xFFFFA657),
   codeBg = Color(0xFF0E0E11),
   lineHighlight = Color(0xFF3F3719),

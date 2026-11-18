@@ -94,7 +94,7 @@ internal fun GroupAvatar(group: GitLabGroup, size: androidx.compose.ui.unit.Dp =
       Text(
         group.name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?",
         style = if (size >= 48.dp) Gl.type.title else Gl.type.label,
-        color = androidx.compose.ui.graphics.Color.White,
+        color = GlTile.iconTint(GlTile.orange),
       )
     }
   }

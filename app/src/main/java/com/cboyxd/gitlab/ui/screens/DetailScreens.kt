@@ -211,6 +211,7 @@ fun IssueDetailScreen(
   onOpenInBrowser: (String) -> Unit,
   onBack: () -> Unit,
   modifier: Modifier = Modifier,
+  showBack: Boolean = true,
   currentUsername: String? = null,
   currentUserId: Long = 0L,
   drafts: Map<String, String> = emptyMap(),
@@ -256,7 +257,7 @@ fun IssueDetailScreen(
       title = issue?.title ?: "Issue",
       overline = reference,
       showTitle = scrolledPastTitle || issue == null,
-      onBack = onBack,
+      onBack = if (showBack) onBack else null,
     ) {
       DetailBarActions(webUrl = issue?.webUrl, title = issue?.title.orEmpty(), menu = menu)
     }
@@ -623,6 +624,7 @@ fun MergeRequestDetailScreen(
   onRebase: () -> Unit = {},
   /** Starts a thread on a diff line; the callback gets null on success or the error message. */
   onCommentOnLine: (anchor: DiffLineAnchor, body: String, onResult: (String?) -> Unit) -> Unit = { _, _, _ -> },
+  showBack: Boolean = true,
   drafts: Map<String, String> = emptyMap(),
   onDraftChange: (String, String) -> Unit = { _, _ -> },
   onClearDraft: ((String) -> Unit)? = null,
@@ -679,6 +681,7 @@ fun MergeRequestDetailScreen(
       onCancelAutoMerge = onCancelAutoMerge,
       onMarkReady = onMarkReady,
       onRebase = onRebase,
+      showBack = showBack,
       onToggleReaction = onToggleReaction,
       onToggleNoteReaction = onToggleNoteReaction,
     )
@@ -900,6 +903,7 @@ private fun MergeRequestOverview(
   onCancelAutoMerge: () -> Unit = {},
   onMarkReady: () -> Unit = {},
   onRebase: () -> Unit = {},
+  showBack: Boolean = true,
   onToggleReaction: ((String) -> Unit)? = null,
   onToggleNoteReaction: ((Long, String) -> Unit)? = null,
 ) {
@@ -935,7 +939,7 @@ private fun MergeRequestOverview(
       title = mr?.title ?: "Merge request",
       overline = reference,
       showTitle = scrolledPastTitle || mr == null,
-      onBack = onBack,
+      onBack = if (showBack) onBack else null,
     ) {
       DetailBarActions(webUrl = mr?.webUrl, title = mr?.title.orEmpty(), menu = menu)
     }
