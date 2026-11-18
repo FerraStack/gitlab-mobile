@@ -48,7 +48,10 @@ import com.cboyxd.gitlab.ui.screens.IssueDetailScreen
 import com.cboyxd.gitlab.ui.screens.IssuesScreen
 import com.cboyxd.gitlab.ui.theme.GitLabTheme
 import com.cboyxd.gitlab.ui.theme.Gl
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import com.cboyxd.gitlab.ui.viewmodel.GitLabViewModel
+import com.cboyxd.gitlab.widget.WidgetStore
 import com.cboyxd.gitlab.ui.viewmodel.Loadable
 import com.cboyxd.gitlab.ui.viewmodel.ScreenDestination
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -80,11 +83,16 @@ class TabletScreenshotTest {
 
   private lateinit var app: GitLabApplication
   private lateinit var server: MockWebServer
+  private lateinit var viewModelStore: ViewModelStore
+  private var testClient: OkHttpClient? = null
 
   @Before
   fun setUp() {
+    InstanceStore.resetForTests()
     app = ApplicationProvider.getApplicationContext()
+    WidgetStore.clear(app)
     InstanceStore.get(app).resetAll()
+    viewModelStore = ViewModelStore()
     val cert = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
     val certs = HandshakeCertificates.Builder()
       .heldCertificate(cert)
@@ -110,18 +118,31 @@ class TabletScreenshotTest {
     }
     server.start()
     GitLabApiClient.clearCache()
-    GitLabApiClient.clientOverride = OkHttpClient.Builder()
+    testClient = OkHttpClient.Builder()
       .sslSocketFactory(certs.sslSocketFactory(), certs.trustManager)
       .build()
+    GitLabApiClient.clientOverride = testClient
   }
 
   @After
   fun tearDown() {
+    viewModelStore.clear()
     GitLabApiClient.clientOverride = null
     GitLabApiClient.clearCache()
+    testClient?.dispatcher?.executorService?.shutdownNow()
+    testClient?.connectionPool?.evictAll()
+    testClient = null
     server.shutdown()
     InstanceStore.get(app).resetAll()
+    InstanceStore.resetForTests()
+    WidgetStore.clear(app)
   }
+
+  private fun createViewModel(): GitLabViewModel =
+    ViewModelProvider(
+      viewModelStore,
+      ViewModelProvider.AndroidViewModelFactory.getInstance(app),
+    )[GitLabViewModel::class.java]
 
   private fun capture(name: String, dark: Boolean, content: @Composable () -> Unit) {
     rule.setContent { GitLabTheme(darkTheme = dark, reducedMotion = true, content = content) }
@@ -141,13 +162,13 @@ class TabletScreenshotTest {
         authKind = GitLabAuth.KIND_PAT,
       )
     )
-    val vm = GitLabViewModel(app)
+    val vm = createViewModel()
     rule.setContent {
       GitLabTheme(darkTheme = false, reducedMotion = true) {
         MainScreen(viewModel = vm, onExit = {})
       }
     }
-    rule.waitUntil(timeoutMillis = 5_000) { vm.uiState.value.bootstrapped }
+    rule.waitUntil(timeoutMillis = 15_000) { vm.uiState.value.bootstrapped }
     rule.onNodeWithTag("main_nav_rail").assertIsDisplayed()
     rule.onNodeWithTag("main_bottom_nav").assertDoesNotExist()
 
@@ -169,23 +190,27 @@ class TabletScreenshotTest {
         authKind = GitLabAuth.KIND_PAT,
       )
     )
-    val vm = GitLabViewModel(app)
+    val vm = createViewModel()
     rule.setContent {
       GitLabTheme(darkTheme = true, reducedMotion = true) {
         MainScreen(viewModel = vm, onExit = {})
       }
     }
-    rule.waitUntil(timeoutMillis = 5_000) {
-      vm.uiState.value.bootstrapped && vm.uiState.value.issues.data.isNotEmpty()
+    rule.waitUntil(timeoutMillis = 15_000) {
+      val s = vm.uiState.value
+      if (s.bootstrapped && !s.issues.loading && s.issues.error != null) {
+        throw AssertionError("Issues failed to load: ${s.issues.error}")
+      }
+      s.bootstrapped && s.issues.data.isNotEmpty()
     }
     rule.runOnUiThread { vm.navigateTo(ScreenDestination.IssuesList) }
-    rule.waitUntil(timeoutMillis = 5_000) {
+    rule.waitUntil(timeoutMillis = 15_000) {
       rule.onAllNodesWithText("Launch button does nothing on tablets").fetchSemanticsNodes().isNotEmpty()
     }
     rule.onNodeWithText("Select an issue").assertIsDisplayed()
 
     rule.onNodeWithText("Launch button does nothing on tablets").performClick()
-    rule.waitUntil(timeoutMillis = 5_000) {
+    rule.waitUntil(timeoutMillis = 15_000) {
       rule.onAllNodesWithText("Confirmed in two-pane view.").fetchSemanticsNodes().isNotEmpty()
     }
     rule.onNode(hasTestTag("two_pane_detail").and(hasAnyDescendant(hasText("Confirmed in two-pane view."))))

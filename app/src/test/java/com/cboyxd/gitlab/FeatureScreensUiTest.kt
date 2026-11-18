@@ -4,6 +4,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -129,6 +131,7 @@ class FeatureScreensUiTest {
     assertEquals(listOf("1"), doneIds)
 
     rule.onNodeWithContentDescription("Mark all as done").assertIsEnabled().performClick()
+    rule.onNodeWithText("Mark all done").performClick()
     assertEquals(1, markAllCount)
 
     rule.onNodeWithContentDescription("Show: All").performClick()
@@ -348,7 +351,7 @@ class FeatureScreensUiTest {
         )
       }
     }
-    rule.onNodeWithText("rocket").performClick()
+    rule.onAllNodesWithText("rocket").onLast().performClick()
     assertEquals(listOf(1L), openedProjects)
   }
 }

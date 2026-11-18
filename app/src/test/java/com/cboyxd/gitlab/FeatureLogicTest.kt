@@ -55,10 +55,12 @@ class FeatureLogicTest {
   private val mrState = java.util.concurrent.atomic.AtomicReference("opened")
   private val mrTitle = java.util.concurrent.atomic.AtomicReference("Draft: Fix launch")
   private val mrAutoMerge = AtomicBoolean(true)
+  private val pipelineStatus = java.util.concurrent.atomic.AtomicReference("running")
   private val recordedRequests = Collections.synchronizedList(mutableListOf<String>())
 
   @Before
   fun setUp() {
+    pipelineStatus.set("running")
     val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
     val certificates = HandshakeCertificates.Builder()
       .heldCertificate(certificate)
@@ -116,17 +118,21 @@ class FeatureLogicTest {
             val resolved = url.queryParameter("resolved") == "true"
             json("""{"id":"disc-1","individual_note":false,"notes":[{"id":601,"body":"Inline","resolvable":true,"resolved":$resolved,"author":{"id":1,"username":"dev","name":"Dev"},"created_at":"2026-11-15T08:00:00Z"}]}""")
           }
-          path.endsWith("/diffs") || path.endsWith("/discussions") || path.endsWith("/commits") || path.endsWith("/pipelines") || path.endsWith("/labels") ->
+          path.endsWith("/diffs") || path.endsWith("/discussions") || path.endsWith("/commits") || path.endsWith("/pipelines") || path.endsWith("/labels") || path.contains("/award_emoji") ->
             json("[]")
           // Pipeline & Job endpoints
-          method == "POST" && path.endsWith("/projects/1/pipeline") ->
+          method == "POST" && path.endsWith("/projects/1/pipeline") -> {
+            pipelineStatus.set("running")
             json("""{"id":99,"project_id":1,"status":"created","ref":"${url.queryParameter("ref") ?: "main"}"}""")
+          }
           method == "GET" && path.endsWith("/projects/1/pipelines/99") ->
-            json("""{"id":99,"project_id":1,"status":"running","ref":"main"}""")
+            json("""{"id":99,"project_id":1,"status":"${pipelineStatus.get()}","ref":"main"}""")
           method == "GET" && path.endsWith("/projects/1/pipelines/99/jobs") ->
             json("""[{"id":42,"name":"deploy","stage":"deploy","status":"manual"},{"id":41,"name":"test","stage":"test","status":"running"}]""")
-          method == "POST" && path.endsWith("/projects/1/pipelines/99/cancel") ->
+          method == "POST" && path.endsWith("/projects/1/pipelines/99/cancel") -> {
+            pipelineStatus.set("canceled")
             json("""{"id":99,"project_id":1,"status":"canceled","ref":"main"}""")
+          }
           method == "POST" && path.endsWith("/projects/1/jobs/42/play") ->
             json("""{"id":42,"name":"deploy","stage":"deploy","status":"pending"}""")
           method == "POST" && path.endsWith("/projects/1/jobs/41/cancel") ->
@@ -295,10 +301,11 @@ class FeatureLogicTest {
     assertNull(replyResult)
     assertEquals(2, h.state.value.mergeRequestDetail.discussions.data.first { it.id == "disc-1" }.notes.size)
 
-    val callsBeforeResolve = h.completedCalls.get()
     review.setResolved("disc-1", true)
-    awaitCalls(h.completedCalls, callsBeforeResolve + 2)
-    assertTrue(h.state.value.mergeRequestDetail.discussions.data.first { it.id == "disc-1" }.notes.first().resolved == true)
+    awaitCondition("setResolved") {
+      !h.state.value.mergeRequestDetail.resolvingThreads.contains("disc-1") &&
+        h.state.value.mergeRequestDetail.discussions.data.first { it.id == "disc-1" }.notes.first().resolved == true
+    }
 
     // rebase delays 4s then reloads MR
     review.rebase()
