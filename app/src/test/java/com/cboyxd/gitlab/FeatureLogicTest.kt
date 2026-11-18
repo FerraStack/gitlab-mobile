@@ -10,7 +10,6 @@ import com.cboyxd.gitlab.data.model.GitLabUser
 import com.cboyxd.gitlab.data.model.MergeOptions
 import com.cboyxd.gitlab.data.repository.GitLabRepository
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,7 +19,6 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -145,6 +143,8 @@ class FeatureLogicTest {
             json("""{"id":41,"name":"test","stage":"test","status":"canceled"}""")
           method == "GET" && path.endsWith("/trace") -> MockResponse().setBody("ok\n")
           // Explore link lookup
+          path.endsWith("/api/v4/namespaces/tanuki") || path.endsWith("/gitlab/api/v4/namespaces/tanuki") ->
+            json("""{"id":14,"name":"Tanuki","path":"tanuki","full_path":"tanuki","kind":"user"}""")
           path.endsWith("/api/v4/projects/team%2Frocket") || path.endsWith("/gitlab/api/v4/projects/team%2Frocket") ->
             json("""{"id":77,"name":"rocket","path_with_namespace":"team/rocket","default_branch":"main","web_url":"https://gitlab.example/team/rocket"}""")
           path.endsWith("/api/v4/projects/missing%2Frepo") ->
@@ -154,6 +154,7 @@ class FeatureLogicTest {
       }
     }
     server.start()
+    GitLabApiClient.resetCacheForTest()
     GitLabApiClient.clearCache()
     GitLabApiClient.clientOverride = OkHttpClient.Builder()
       .sslSocketFactory(certificates.sslSocketFactory(), certificates.trustManager)
@@ -171,6 +172,7 @@ class FeatureLogicTest {
   @After
   fun tearDown() {
     GitLabApiClient.clientOverride = null
+    GitLabApiClient.resetCacheForTest()
     GitLabApiClient.clearCache()
     server.shutdown()
   }
@@ -206,21 +208,21 @@ class FeatureLogicTest {
     }
   }
 
-  private suspend fun TestScope.awaitCalls(calls: AtomicInteger, expected: Int) {
+  private fun TestScope.awaitCalls(calls: AtomicInteger, expected: Int) {
     val deadline = System.currentTimeMillis() + 5_000L
     while (calls.get() < expected && System.currentTimeMillis() < deadline) {
       runCurrent()
-      withContext(Dispatchers.IO) { Thread.sleep(10) }
+      if (calls.get() < expected) Thread.sleep(10)
     }
     runCurrent()
     assertTrue("Expected >= $expected calls, got ${calls.get()}", calls.get() >= expected)
   }
 
-  private suspend fun TestScope.awaitCondition(description: String = "condition", predicate: () -> Boolean) {
+  private fun TestScope.awaitCondition(description: String = "condition", predicate: () -> Boolean) {
     val deadline = System.currentTimeMillis() + 5_000L
     while (!predicate() && System.currentTimeMillis() < deadline) {
       runCurrent()
-      withContext(Dispatchers.IO) { Thread.sleep(10) }
+      if (!predicate()) Thread.sleep(10)
     }
     runCurrent()
     assertTrue("Timed out waiting for $description", predicate())
@@ -416,13 +418,14 @@ class FeatureLogicTest {
     assertFalse(explore.handleLink("$hostAuthority/gitlab/team/rocket/-/settings/ci_cd"))
     assertFalse(explore.handleLink("$hostAuthority/gitlab/"))
 
-    // Direct user route needs no project lookup
+    // Single-segment route resolves tanuki via /gitlab/api/v4/namespaces/tanuki
     assertTrue(explore.handleLink("$hostAuthority/gitlab/tanuki"))
+    awaitCalls(h.completedCalls, 1)
     assertEquals(ScreenDestination.UserDetail(0, "tanuki"), h.navigated.removeAt(0))
 
     // Project route resolves team/rocket via /gitlab/api/v4/projects/team%2Frocket and caches id 77
     assertTrue(explore.handleLink("$hostAuthority/gitlab/team/rocket"))
-    awaitCalls(h.completedCalls, 1)
+    awaitCalls(h.completedCalls, 2)
     assertEquals(ScreenDestination.ProjectDetail(77), h.navigated.removeAt(0))
 
     // Subsequent sub-routes reuse cached projectId 77 without extra API lookups
@@ -450,7 +453,7 @@ class FeatureLogicTest {
     // Unknown project returns true immediately then falls back to openExternal on 404
     val missingUrl = "$hostAuthority/gitlab/missing/repo/-/issues/5"
     assertTrue(explore.handleLink(missingUrl))
-    awaitCalls(h.completedCalls, 2)
+    awaitCalls(h.completedCalls, 3)
     assertEquals(listOf(missingUrl), h.externalUrls)
   }
 }

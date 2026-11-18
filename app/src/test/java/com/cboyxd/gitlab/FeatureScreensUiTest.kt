@@ -135,7 +135,7 @@ class FeatureScreensUiTest {
     assertEquals(1, markAllCount)
 
     rule.onNodeWithContentDescription("Show: All").performClick()
-    rule.onNodeWithText("Mentioned").performClick()
+    rule.onAllNodesWithText("Mentioned").onLast().performClick()
     assertEquals(listOf(InboxFilter.MENTIONED), selectedFilters)
   }
 
@@ -303,7 +303,7 @@ class FeatureScreensUiTest {
         )
       }
     }
-    rule.onNodeWithText("Find projects, issues, merge requests and people.").assertIsDisplayed()
+    rule.onNodeWithText("Find projects, issues, merge requests, code, commits and people.").assertIsDisplayed()
 
     rule.onNodeWithText("Issues").performClick()
     assertEquals(listOf(SearchScope.ISSUES), scopes)
@@ -326,7 +326,8 @@ class FeatureScreensUiTest {
         )
       }
     }
-    rule.onNodeWithText("Sign in to search issues").assertIsDisplayed()
+    rule.onNodeWithText("Sign in to search").assertIsDisplayed()
+    rule.onNodeWithText("Global issues search requires an account on this server.").assertIsDisplayed()
   }
 
   @Test

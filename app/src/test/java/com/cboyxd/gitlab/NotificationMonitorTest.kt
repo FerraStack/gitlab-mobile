@@ -67,6 +67,7 @@ class NotificationMonitorTest {
     server = MockWebServer()
     server.useHttps(certificates.sslSocketFactory(), false)
     server.start()
+    GitLabApiClient.resetCacheForTest()
     GitLabApiClient.clearCache()
     GitLabApiClient.clientOverride = OkHttpClient.Builder()
       .sslSocketFactory(certificates.sslSocketFactory(), certificates.trustManager)
@@ -76,6 +77,7 @@ class NotificationMonitorTest {
   @After
   fun tearDown() {
     GitLabApiClient.clientOverride = null
+    GitLabApiClient.resetCacheForTest()
     GitLabApiClient.clearCache()
     server.shutdown()
     store.resetAll()

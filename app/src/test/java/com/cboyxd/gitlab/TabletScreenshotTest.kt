@@ -48,6 +48,7 @@ import com.cboyxd.gitlab.ui.screens.IssueDetailScreen
 import com.cboyxd.gitlab.ui.screens.IssuesScreen
 import com.cboyxd.gitlab.ui.theme.GitLabTheme
 import com.cboyxd.gitlab.ui.theme.Gl
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import com.cboyxd.gitlab.ui.viewmodel.GitLabViewModel
@@ -117,6 +118,7 @@ class TabletScreenshotTest {
       }
     }
     server.start()
+    GitLabApiClient.resetCacheForTest()
     GitLabApiClient.clearCache()
     testClient = OkHttpClient.Builder()
       .sslSocketFactory(certs.sslSocketFactory(), certs.trustManager)
@@ -128,6 +130,7 @@ class TabletScreenshotTest {
   fun tearDown() {
     viewModelStore.clear()
     GitLabApiClient.clientOverride = null
+    GitLabApiClient.resetCacheForTest()
     GitLabApiClient.clearCache()
     testClient?.dispatcher?.executorService?.shutdownNow()
     testClient?.connectionPool?.evictAll()
@@ -141,7 +144,10 @@ class TabletScreenshotTest {
   private fun createViewModel(): GitLabViewModel =
     ViewModelProvider(
       viewModelStore,
-      ViewModelProvider.AndroidViewModelFactory.getInstance(app),
+      object : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T = GitLabViewModel(app) as T
+      },
     )[GitLabViewModel::class.java]
 
   private fun capture(name: String, dark: Boolean, content: @Composable () -> Unit) {
