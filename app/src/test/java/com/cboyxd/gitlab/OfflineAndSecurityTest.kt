@@ -261,6 +261,7 @@ class OfflineAndSecurityTest {
             projectCalls.incrementAndGet()
             MockResponse().setBody("""{"id":12,"name":"rocket","name_with_namespace":"Org / rocket","path_with_namespace":"org/rocket","default_branch":"main","web_url":"https://gitlab.com/org/rocket"}""")
           }
+          request.requestUrl?.encodedPath == "/api/v4/projects/12/languages" -> MockResponse().setBody("{}")
           path.startsWith("/api/v4/projects/12") -> MockResponse().setBody("[]")
           else -> MockResponse().setBody("[]")
         }
@@ -281,7 +282,10 @@ class OfflineAndSecurityTest {
     val handle = SavedStateHandle(mapOf(GitLabViewModel.KEY_NAV_STATE to navJson))
 
     val vm = GitLabViewModel(app, handle)
-    waitUntil { vm.uiState.value.bootstrapped && projectCalls.get() >= 1 }
+    waitUntil {
+      val s = vm.uiState.value
+      s.bootstrapped && !s.isLoading && !s.project.project.loading && projectCalls.get() >= 1
+    }
 
     assertEquals(BottomTab.PROJECTS, vm.uiState.value.currentTab)
     assertEquals(ScreenDestination.ProjectDetail(12L), vm.uiState.value.destination)
