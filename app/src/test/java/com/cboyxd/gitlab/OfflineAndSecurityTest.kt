@@ -306,11 +306,14 @@ class OfflineAndSecurityTest {
     }
 
     var capturedMessage: UiMessage? = null
+    val subscribedLatch = CountDownLatch(1)
     val msgLatch = CountDownLatch(1)
-    val collectorJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+    val collectorJob = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined).launch {
+      subscribedLatch.countDown()
       capturedMessage = vm.messages.first { it.isError }
       msgLatch.countDown()
     }
+    assertTrue(subscribedLatch.await(2, TimeUnit.SECONDS))
     vm.toggleProjectStar(12L)
     waitUntil { msgLatch.count == 0L }
     collectorJob.cancel()
